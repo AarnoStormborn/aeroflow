@@ -8,8 +8,12 @@ import os
 from pathlib import Path
 from functools import lru_cache
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load .env file before settings are initialized
+load_dotenv()
 
 
 class OpenSkySettings(BaseSettings):
@@ -29,14 +33,17 @@ class S3Settings(BaseSettings):
     
     bucket_name: str = Field(default="flights-forecasting-data")
     prefix: str = Field(default="raw/flights")
-    region: str = Field(default="us-east-1")
-    # AWS credentials (can also use IAM roles / environment)
-    access_key_id: str | None = Field(default=None)
-    secret_access_key: str | None = Field(default=None)
+    region: str = Field(default="us-east-1", validation_alias="AWS_REGION")
+    # AWS credentials - use standard AWS env var names
+    access_key_id: str | None = Field(default=None, validation_alias="AWS_ACCESS_KEY_ID")
+    secret_access_key: str | None = Field(default=None, validation_alias="AWS_SECRET_ACCESS_KEY")
     # For local development with LocalStack or MinIO
     endpoint_url: str | None = Field(default=None)
     
-    model_config = SettingsConfigDict(env_prefix="AWS_S3_")
+    model_config = SettingsConfigDict(
+        env_prefix="AWS_S3_",
+        populate_by_name=True,  # Allow both alias and prefixed names
+    )
 
 
 class DatabaseSettings(BaseSettings):
