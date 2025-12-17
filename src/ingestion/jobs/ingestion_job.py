@@ -30,6 +30,7 @@ from src.utils.exceptions import (
 from src.ingestion.config import settings
 from src.ingestion.components.client import OpenSkyClient, create_client
 from src.ingestion.components.s3_uploader import S3Uploader, create_uploader
+from src.notifications import get_notifier
 from src.ingestion.db import (
     IngestionRepository,
     IngestionStatus,
@@ -203,6 +204,19 @@ class IngestionJob:
             )
             
             logger.info(f"Ingestion complete: {record_count} records stored at {s3_path}")
+            
+            # Send success notification (metrics only, no alert)
+            try:
+                duration = (datetime.now(timezone.utc) - now).total_seconds()
+                get_notifier().on_success(
+                    record_id=updated_record.id,
+                    record_count=record_count,
+                    s3_path=s3_path,
+                    duration_seconds=duration,
+                )
+            except Exception as notify_error:
+                logger.warning(f"Failed to send success notification: {notify_error}")
+            
             return updated_record
             
         except Exception as e:
@@ -211,6 +225,18 @@ class IngestionJob:
             
             logger.error(f"Ingestion FAILED [{category}]: {message}")
             logger.debug(f"Full traceback:\n{traceback.format_exc()}")
+            
+            # Send failure notification (metrics + SNS alert)
+            try:
+                duration = (datetime.now(timezone.utc) - now).total_seconds()
+                get_notifier().on_failure(
+                    record_id=record.id,
+                    error_category=category,
+                    error_message=message,
+                    duration_seconds=duration,
+                )
+            except Exception as notify_error:
+                logger.warning(f"Failed to send failure notification: {notify_error}")
             
             # Update record with failure
             try:
