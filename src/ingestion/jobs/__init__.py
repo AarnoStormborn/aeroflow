@@ -3,7 +3,6 @@
 from src.ingestion.jobs.ingestion_job import (
     IngestionJob,
     run_ingestion,
-    DataType,
 )
 from src.ingestion.jobs.scheduler import (
     IngestionScheduler,
@@ -14,7 +13,6 @@ from src.ingestion.jobs.scheduler import (
 __all__ = [
     "IngestionJob",
     "run_ingestion",
-    "DataType",
     "IngestionScheduler",
     "create_scheduler",
     "start_scheduler",

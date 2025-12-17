@@ -6,6 +6,11 @@ Run the ingestion scheduler:
     
 Or import and use programmatically:
     from src.ingestion import run_ingestion, start_scheduler
+
+Environment variables:
+    SCHEDULER_INTERVAL_SECONDS: Polling interval (default: 60s)
+    SCHEDULER_RUN_ON_START: Run immediately on start (default: true)
+    OPENSKY_BBOX_LAMIN/LOMIN/LAMAX/LOMAX: Bounding box coordinates
 """
 
 import argparse
@@ -20,12 +25,6 @@ def main():
         description="Flights Forecasting Ingestion Service"
     )
     parser.add_argument(
-        "--data-type",
-        choices=["flights", "states", "both"],
-        default="flights",
-        help="Type of data to ingest (default: flights)",
-    )
-    parser.add_argument(
         "--run-once",
         action="store_true",
         help="Run a single ingestion instead of scheduling",
@@ -34,7 +33,7 @@ def main():
         "--interval",
         type=int,
         default=None,
-        help="Polling interval in minutes (default: from settings)",
+        help="Polling interval in seconds (default: from settings)",
     )
     parser.add_argument(
         "--log-level",
@@ -57,32 +56,29 @@ def main():
     logger.info("FLIGHTS FORECASTING INGESTION SERVICE")
     logger.info("=" * 60)
     logger.info(f"Environment: {settings.environment}")
-    logger.info(f"Data type: {args.data_type}")
+    logger.info(f"Bounding box: {settings.opensky.bounding_box}")
     logger.info(f"Run once: {args.run_once}")
     
     if args.run_once:
         # Run a single ingestion
         from src.ingestion import run_ingestion
         
-        if args.data_type == "both":
-            logger.info("Running both flights and states ingestion...")
-            flights_result = run_ingestion("flights")
-            states_result = run_ingestion("states")
-            logger.info(f"Flights: {flights_result.status.value}, States: {states_result.status.value}")
-        else:
-            result = run_ingestion(args.data_type)
-            logger.info(f"Ingestion result: {result.status.value}")
-            if result.s3_path:
-                logger.info(f"Data stored at: {result.s3_path}")
-            if result.error_message:
-                logger.error(f"Error: {result.error_message}")
+        result = run_ingestion()
+        logger.info(f"Ingestion result: {result.status.value}")
+        logger.info(f"Records: {result.record_count}")
+        if result.s3_path:
+            logger.info(f"Data stored at: {result.s3_path}")
+        if result.error_message:
+            logger.error(f"Error: {result.error_message}")
     else:
         # Start the scheduler
         from src.ingestion import create_scheduler
         
-        interval = args.interval or settings.scheduler.polling_interval_minutes
-        scheduler = create_scheduler(interval_minutes=interval)
-        scheduler.start(args.data_type)
+        interval = args.interval or settings.scheduler.interval_seconds
+        logger.info(f"Starting scheduler with {interval}s interval")
+        
+        scheduler = create_scheduler(interval_seconds=interval)
+        scheduler.start()
 
 
 if __name__ == "__main__":

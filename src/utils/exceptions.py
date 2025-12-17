@@ -49,7 +49,12 @@ class APIConnectionError(APIError):
 
 class APITimeoutError(APIError):
     """Error when API request times out."""
-    pass
+    
+    def __init__(self, message: str = "API request timed out", timeout: int | None = None):
+        self.timeout = timeout
+        if timeout:
+            message = f"{message} (after {timeout}s)"
+        super().__init__(message)
 
 
 # =============================================================================

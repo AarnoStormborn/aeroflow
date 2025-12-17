@@ -24,8 +24,18 @@ class OpenSkySettings(BaseSettings):
     # Optional authentication (for higher rate limits)
     username: str | None = Field(default=None)
     password: str | None = Field(default=None)
+    # Mumbai airspace bounding box (default region)
+    bbox_lamin: float = Field(default=18.0)
+    bbox_lomin: float = Field(default=71.5)
+    bbox_lamax: float = Field(default=20.0)
+    bbox_lomax: float = Field(default=74.0)
     
     model_config = SettingsConfigDict(env_prefix="OPENSKY_")
+    
+    @property
+    def bounding_box(self) -> tuple[float, float, float, float]:
+        """Get bounding box as tuple (lamin, lomin, lamax, lomax)."""
+        return (self.bbox_lamin, self.bbox_lomin, self.bbox_lamax, self.bbox_lomax)
 
 
 class S3Settings(BaseSettings):
@@ -62,10 +72,10 @@ class DatabaseSettings(BaseSettings):
 class SchedulerSettings(BaseSettings):
     """Scheduler configuration."""
     
-    # Polling interval in minutes
-    polling_interval_minutes: int = Field(default=15)
-    # Time window for each fetch (in seconds, matches polling interval)
-    fetch_window_seconds: int = Field(default=900)  # 15 minutes
+    # Polling interval in seconds (default 60s for local, use 600s for production)
+    interval_seconds: int = Field(default=60)
+    # Run ingestion immediately on scheduler start
+    run_on_start: bool = Field(default=True)
     
     model_config = SettingsConfigDict(env_prefix="SCHEDULER_")
 

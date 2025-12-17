@@ -1,24 +1,31 @@
 """
-Ingestion job that fetches flight data and stores it.
+Ingestion job that fetches state vectors and stores them.
 
 This is the main pipeline that:
-1. Fetches flight data from OpenSky API
+1. Fetches state vectors from OpenSky API (for configured region)
 2. Converts to Parquet using Polars
 3. Uploads to S3
 4. Records the ingestion in SQLite
+
+All failures are captured with appropriate error messages and status.
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Literal
+import traceback
+from datetime import datetime, timezone
+from typing import Callable
 
 from src.utils import logger
 from src.utils.exceptions import (
+    FlightServiceError,
     OpenSkyAPIError,
     RateLimitError,
     APIConnectionError,
     APITimeoutError,
     S3UploadError,
+    S3ConfigurationError,
     ParquetError,
+    DatabaseError,
+    ConfigurationError,
 )
 from src.ingestion.config import settings
 from src.ingestion.components.client import OpenSkyClient, create_client
@@ -31,19 +38,19 @@ from src.ingestion.db import (
 )
 
 
-DataType = Literal["flights", "states"]
-
-
 class IngestionJob:
     """
     Main ingestion job that orchestrates the data pipeline.
     
     Workflow:
-    1. Calculate time window for data fetch
-    2. Create pending ingestion record
-    3. Fetch data from OpenSky API
-    4. Convert to Parquet and upload to S3
-    5. Update ingestion record with results
+    1. Create pending ingestion record
+    2. Fetch state vectors from OpenSky API (with bounding box)
+    3. Convert to Parquet and upload to S3
+    4. Update ingestion record with results
+    
+    All failures are captured in the database with:
+    - status = FAILED
+    - error_message = Detailed error description
     """
     
     def __init__(
@@ -56,81 +63,138 @@ class IngestionJob:
         Initialize the ingestion job.
         
         Args:
-            client: OpenSky API client
-            uploader: S3 uploader
-            repository: Ingestion record repository
+            client: OpenSky API client (created if not provided)
+            uploader: S3 uploader (created if not provided)
+            repository: Ingestion record repository (created if not provided)
+            
+        Raises:
+            ConfigurationError: If components cannot be initialized
         """
-        self.client = client or create_client()
-        self.uploader = uploader or create_uploader()
-        self.repository = repository or create_repository()
-        
-        logger.info("IngestionJob initialized")
-    
-    def _calculate_time_window(self) -> tuple[datetime, datetime]:
-        """
-        Calculate the time window for the current fetch.
-        
-        Returns:
-            Tuple of (start_time, end_time) as datetime objects
-        """
-        now = datetime.now(timezone.utc)
-        window_seconds = settings.scheduler.fetch_window_seconds
-        
-        # Round down to the previous interval boundary
-        interval_seconds = settings.scheduler.polling_interval_minutes * 60
-        epoch_seconds = int(now.timestamp())
-        aligned_end = (epoch_seconds // interval_seconds) * interval_seconds
-        aligned_start = aligned_end - window_seconds
-        
-        start_time = datetime.fromtimestamp(aligned_start, tz=timezone.utc)
-        end_time = datetime.fromtimestamp(aligned_end, tz=timezone.utc)
-        
-        return start_time, end_time
-    
-    def run_flights_ingestion(self) -> IngestionRecord:
-        """
-        Run the flights ingestion pipeline.
-        
-        Returns:
-            IngestionRecord with the result
-        """
-        logger.info("Starting flights ingestion job")
-        
-        # Calculate time window
-        start_time, end_time = self._calculate_time_window()
-        logger.info(f"Time window: {start_time} to {end_time}")
-        
-        # Create pending record
-        record = self.repository.create_record(
-            time_window_start=start_time,
-            time_window_end=end_time,
-            status=IngestionStatus.PENDING,
-        )
+        try:
+            self.client = client or create_client()
+        except Exception as e:
+            raise ConfigurationError(f"Failed to initialize OpenSky client: {e}")
         
         try:
-            # Fetch flights from API
-            flights = self.client.get_flights_by_time(
-                begin=int(start_time.timestamp()),
-                end=int(end_time.timestamp()),
-            )
+            self.uploader = uploader or create_uploader()
+        except Exception as e:
+            raise ConfigurationError(f"Failed to initialize S3 uploader: {e}")
+        
+        try:
+            self.repository = repository or create_repository()
+        except Exception as e:
+            raise ConfigurationError(f"Failed to initialize database repository: {e}")
+        
+        logger.info("IngestionJob initialized successfully")
+    
+    def _categorize_error(self, error: Exception) -> tuple[str, str]:
+        """
+        Categorize an error for logging and storage.
+        
+        Returns:
+            Tuple of (error_category, error_message)
+        """
+        if isinstance(error, RateLimitError):
+            category = "RATE_LIMIT"
+            message = f"API rate limit exceeded. Retry after {error.retry_after}s"
+        elif isinstance(error, APITimeoutError):
+            category = "API_TIMEOUT"
+            message = f"API request timed out after {error.timeout}s"
+        elif isinstance(error, APIConnectionError):
+            category = "API_CONNECTION"
+            message = f"Failed to connect to OpenSky API: {error}"
+        elif isinstance(error, OpenSkyAPIError):
+            category = "API_ERROR"
+            message = f"OpenSky API error (HTTP {error.status_code}): {error.message}"
+        elif isinstance(error, S3ConfigurationError):
+            category = "S3_CONFIG"
+            message = f"S3 configuration error: {error}"
+        elif isinstance(error, S3UploadError):
+            category = "S3_UPLOAD"
+            message = f"Failed to upload to S3 ({error.bucket}/{error.key}): {error.message}"
+        elif isinstance(error, ParquetError):
+            category = "PARQUET"
+            message = f"Failed to create Parquet file: {error}"
+        elif isinstance(error, DatabaseError):
+            category = "DATABASE"
+            message = f"Database error: {error}"
+        elif isinstance(error, ConfigurationError):
+            category = "CONFIG"
+            message = f"Configuration error: {error}"
+        elif isinstance(error, FlightServiceError):
+            category = "SERVICE"
+            message = f"Service error: {error}"
+        else:
+            category = "UNEXPECTED"
+            message = f"Unexpected error ({type(error).__name__}): {error}"
+        
+        return category, message
+    
+    def run(self) -> IngestionRecord:
+        """
+        Run the states ingestion pipeline.
+        
+        Returns:
+            IngestionRecord with the result (status will be SUCCESS or FAILED)
             
-            if not flights:
-                logger.warning("No flights returned from API")
+        The method never raises exceptions - all errors are captured in
+        the returned record's status and error_message fields.
+        """
+        logger.info("Starting states ingestion job")
+        
+        now = datetime.now(timezone.utc)
+        bbox = settings.opensky.bounding_box
+        
+        logger.info(f"Fetching states for region: lamin={bbox[0]}, lomin={bbox[1]}, lamax={bbox[2]}, lomax={bbox[3]}")
+        
+        # Create pending record
+        try:
+            record = self.repository.create_record(
+                time_window_start=now,
+                time_window_end=now,
+                status=IngestionStatus.PENDING,
+            )
+        except Exception as e:
+            # Can't even create the tracking record - log and return a dummy record
+            logger.exception(f"CRITICAL: Failed to create ingestion record: {e}")
+            return IngestionRecord(
+                id=None,
+                created_at=now,
+                time_window_start=now,
+                time_window_end=now,
+                s3_path=None,
+                record_count=0,
+                status=IngestionStatus.FAILED,
+                error_message=f"Failed to create tracking record: {e}",
+            )
+        
+        try:
+            # Step 1: Fetch states from API with bounding box
+            logger.info("Step 1/3: Fetching state vectors from OpenSky API...")
+            states_response = self.client.get_states(bounding_box=bbox)
+            
+            states = states_response.get("states", [])
+            if not states:
+                logger.warning("No state vectors returned from API (empty response)")
                 return self.repository.update_record(
                     record_id=record.id,
                     record_count=0,
                     status=IngestionStatus.SUCCESS,
                 )
             
-            logger.info(f"Fetched {len(flights)} flights from OpenSky API")
+            logger.info(f"Step 1/3: Fetched {len(states)} state vectors")
             
-            # Upload to S3
-            s3_path, record_count = self.uploader.upload_flights(
-                flights=flights,
-                timestamp=end_time,
+            # Step 2: Convert to Parquet and upload to S3
+            logger.info("Step 2/3: Converting to Parquet and uploading to S3...")
+            s3_path, record_count = self.uploader.upload_states(
+                states_response=states_response,
+                timestamp=now,
             )
             
-            # Update record with success
+            logger.info(f"Step 2/3: Uploaded {record_count} records to {s3_path}")
+            
+            # Step 3: Update record with success
+            logger.info("Step 3/3: Updating ingestion record...")
             updated_record = self.repository.update_record(
                 record_id=record.id,
                 s3_path=s3_path,
@@ -141,138 +205,73 @@ class IngestionJob:
             logger.info(f"Ingestion complete: {record_count} records stored at {s3_path}")
             return updated_record
             
-        except RateLimitError as e:
-            logger.warning(f"Rate limit hit: {e.message}, retry after: {e.retry_after}s")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=f"Rate limit exceeded. Retry after {e.retry_after}s",
-            )
-            
-        except (OpenSkyAPIError, APIConnectionError, APITimeoutError) as e:
-            logger.error(f"API error during ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=str(e),
-            )
-            
-        except (S3UploadError, ParquetError) as e:
-            logger.error(f"Storage error during ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=str(e),
-            )
-            
         except Exception as e:
-            logger.exception(f"Unexpected error during ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=f"Unexpected error: {e}",
-            )
-    
-    def run_states_ingestion(self) -> IngestionRecord:
-        """
-        Run the state vectors ingestion pipeline.
-        
-        Returns:
-            IngestionRecord with the result
-        """
-        logger.info("Starting states ingestion job")
-        
-        now = datetime.now(timezone.utc)
-        
-        # For states, we use current time as both start and end
-        # since we're fetching real-time data
-        record = self.repository.create_record(
-            time_window_start=now,
-            time_window_end=now,
-            status=IngestionStatus.PENDING,
-        )
-        
-        try:
-            # Fetch current states
-            states_response = self.client.get_states()
+            # Categorize and log the error
+            category, message = self._categorize_error(e)
             
-            states = states_response.get("states", [])
-            if not states:
-                logger.warning("No state vectors returned from API")
+            logger.error(f"Ingestion FAILED [{category}]: {message}")
+            logger.debug(f"Full traceback:\n{traceback.format_exc()}")
+            
+            # Update record with failure
+            try:
                 return self.repository.update_record(
                     record_id=record.id,
-                    record_count=0,
-                    status=IngestionStatus.SUCCESS,
+                    status=IngestionStatus.FAILED,
+                    error_message=f"[{category}] {message}",
                 )
-            
-            logger.info(f"Fetched {len(states)} state vectors from OpenSky API")
-            
-            # Upload to S3
-            s3_path, record_count = self.uploader.upload_states(
-                states_response=states_response,
-                timestamp=now,
-            )
-            
-            # Update record with success
-            updated_record = self.repository.update_record(
-                record_id=record.id,
-                s3_path=s3_path,
-                record_count=record_count,
-                status=IngestionStatus.SUCCESS,
-            )
-            
-            logger.info(f"States ingestion complete: {record_count} records stored at {s3_path}")
-            return updated_record
-            
-        except RateLimitError as e:
-            logger.warning(f"Rate limit hit: {e.message}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=f"Rate limit exceeded. Retry after {e.retry_after}s",
-            )
-            
-        except (OpenSkyAPIError, APIConnectionError, APITimeoutError) as e:
-            logger.error(f"API error during states ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=str(e),
-            )
-            
-        except (S3UploadError, ParquetError) as e:
-            logger.error(f"Storage error during states ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=str(e),
-            )
-            
-        except Exception as e:
-            logger.exception(f"Unexpected error during states ingestion: {e}")
-            return self.repository.update_record(
-                record_id=record.id,
-                status=IngestionStatus.FAILED,
-                error_message=f"Unexpected error: {e}",
-            )
+            except Exception as update_error:
+                # Even the update failed - log both errors
+                logger.exception(f"CRITICAL: Failed to update record with error: {update_error}")
+                return IngestionRecord(
+                    id=record.id,
+                    created_at=record.created_at,
+                    time_window_start=record.time_window_start,
+                    time_window_end=record.time_window_end,
+                    s3_path=None,
+                    record_count=0,
+                    status=IngestionStatus.FAILED,
+                    error_message=f"[{category}] {message} (also failed to update record: {update_error})",
+                )
 
 
-def run_ingestion(data_type: DataType = "flights") -> IngestionRecord:
+def run_ingestion() -> IngestionRecord:
     """
     Run a single ingestion cycle.
     
-    Args:
-        data_type: Type of data to ingest ("flights" or "states")
-        
     Returns:
         IngestionRecord with the result
+        
+    Never raises exceptions - all errors are captured in the returned record.
     """
-    job = IngestionJob()
-    
-    if data_type == "flights":
-        return job.run_flights_ingestion()
-    else:
-        return job.run_states_ingestion()
+    try:
+        job = IngestionJob()
+        return job.run()
+    except ConfigurationError as e:
+        # Failed during initialization
+        logger.error(f"Failed to initialize ingestion job: {e}")
+        return IngestionRecord(
+            id=None,
+            created_at=datetime.now(timezone.utc),
+            time_window_start=datetime.now(timezone.utc),
+            time_window_end=datetime.now(timezone.utc),
+            s3_path=None,
+            record_count=0,
+            status=IngestionStatus.FAILED,
+            error_message=f"[CONFIG] {e}",
+        )
+    except Exception as e:
+        # Truly unexpected error
+        logger.exception(f"Unexpected error running ingestion: {e}")
+        return IngestionRecord(
+            id=None,
+            created_at=datetime.now(timezone.utc),
+            time_window_start=datetime.now(timezone.utc),
+            time_window_end=datetime.now(timezone.utc),
+            s3_path=None,
+            record_count=0,
+            status=IngestionStatus.FAILED,
+            error_message=f"[UNEXPECTED] {e}",
+        )
 
 
-__all__ = ["IngestionJob", "run_ingestion", "DataType"]
+__all__ = ["IngestionJob", "run_ingestion"]
