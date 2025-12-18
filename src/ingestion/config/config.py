@@ -41,7 +41,7 @@ class OpenSkySettings(BaseSettings):
 class S3Settings(BaseSettings):
     """AWS S3 configuration."""
     
-    bucket_name: str = Field(default="flights-forecasting-data")
+    bucket_name: str = Field(default="flights-forecasting")
     prefix: str = Field(default="raw/flights")
     region: str = Field(default="us-east-1", validation_alias="AWS_REGION")
     # AWS credentials - use standard AWS env var names
