@@ -19,6 +19,6 @@ fi
 
 # Run ingestion once
 echo "Starting ingestion..."
-uv run main.py --run-once
+python main.py --run-once
 
 echo "Ingestion complete"
