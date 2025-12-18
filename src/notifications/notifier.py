@@ -1,7 +1,7 @@
 """
-Main notifier that combines CloudWatch metrics and SNS alerts.
+Main notifier that sends Slack alerts.
 
-Provides a unified interface for recording metrics and sending notifications.
+Provides a unified interface for sending notifications.
 """
 
 from datetime import datetime, timezone
@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING
 
 from src.utils import logger
 from src.notifications.config import notification_settings
-from src.notifications.cloudwatch import CloudWatchPublisher, create_cloudwatch_publisher
-from src.notifications.sns import SNSNotifier, create_sns_notifier
+from src.notifications.slack import SlackNotifier, create_slack_notifier
 
 if TYPE_CHECKING:
     from src.ingestion.db import IngestionRecord
@@ -20,25 +19,20 @@ class IngestionNotifier:
     """
     Unified notifier for ingestion events.
     
-    Combines:
-    - CloudWatch metrics for monitoring
-    - SNS notifications for alerts
+    Sends Slack notifications for failures (and optionally successes).
     """
     
     def __init__(
         self,
-        cloudwatch: CloudWatchPublisher | None = None,
-        sns: SNSNotifier | None = None,
+        slack: SlackNotifier | None = None,
     ):
         """
         Initialize the notifier.
         
         Args:
-            cloudwatch: CloudWatch publisher (created if not provided)
-            sns: SNS notifier (created if not provided)
+            slack: Slack notifier (created if not provided)
         """
-        self.cloudwatch = cloudwatch or create_cloudwatch_publisher()
-        self.sns = sns or create_sns_notifier()
+        self.slack = slack or create_slack_notifier()
         
         logger.info("IngestionNotifier initialized")
     
@@ -60,8 +54,12 @@ class IngestionNotifier:
         """
         logger.info(f"Recording success: {record_count} records")
         
-        # Publish CloudWatch metrics
-        self.cloudwatch.record_success(record_count, duration_seconds)
+        # Only notify on success if configured (usually disabled)
+        self.slack.notify_success(
+            record_count=record_count,
+            s3_path=s3_path,
+            duration_seconds=duration_seconds,
+        )
     
     def on_failure(
         self,
@@ -81,11 +79,8 @@ class IngestionNotifier:
         """
         logger.error(f"Recording failure: [{error_category}] {error_message}")
         
-        # Publish CloudWatch metrics
-        self.cloudwatch.record_failure(error_category, duration_seconds)
-        
-        # Send SNS notification
-        self.sns.notify_failure(
+        # Send Slack notification
+        self.slack.notify_failure(
             error_category=error_category,
             error_message=error_message,
             record_id=record_id,

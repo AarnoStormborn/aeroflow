@@ -1,9 +1,7 @@
 """
-Notifications module for CloudWatch metrics and SNS alerts.
+Notifications module for Slack alerts.
 
-Provides monitoring and alerting for the ingestion service:
-- CloudWatch custom metrics (success/failure counts, latency)
-- SNS notifications for failures (email/SMS alerts)
+Provides alerting for the ingestion service via Slack webhooks.
 
 Usage:
     from src.notifications import get_notifier
@@ -13,26 +11,20 @@ Usage:
     notifier.on_failure(record_id=2, error_category="API_ERROR", error_message="...")
 
 Configuration (environment variables):
-    CLOUDWATCH_ENABLED: Enable CloudWatch metrics (default: true)
-    CLOUDWATCH_NAMESPACE: Metric namespace (default: FlightsForecasting/Ingestion)
-    SNS_ENABLED: Enable SNS notifications (default: true)
-    SNS_TOPIC_ARN: SNS topic ARN for alerts (required for notifications)
+    SLACK_ENABLED: Enable Slack notifications (default: true)
+    SLACK_WEBHOOK_URL: Slack incoming webhook URL (required)
+    SLACK_NOTIFY_ON_SUCCESS: Also notify on success (default: false)
 """
 
 from src.notifications.config import (
-    CloudWatchSettings,
-    SNSSettings,
+    SlackSettings,
     NotificationSettings,
     notification_settings,
     get_notification_settings,
 )
-from src.notifications.cloudwatch import (
-    CloudWatchPublisher,
-    create_cloudwatch_publisher,
-)
-from src.notifications.sns import (
-    SNSNotifier,
-    create_sns_notifier,
+from src.notifications.slack import (
+    SlackNotifier,
+    create_slack_notifier,
 )
 from src.notifications.notifier import (
     IngestionNotifier,
@@ -42,17 +34,13 @@ from src.notifications.notifier import (
 
 __all__ = [
     # Config
-    "CloudWatchSettings",
-    "SNSSettings",
+    "SlackSettings",
     "NotificationSettings",
     "notification_settings",
     "get_notification_settings",
-    # CloudWatch
-    "CloudWatchPublisher",
-    "create_cloudwatch_publisher",
-    # SNS
-    "SNSNotifier",
-    "create_sns_notifier",
+    # Slack
+    "SlackNotifier",
+    "create_slack_notifier",
     # Main notifier
     "IngestionNotifier",
     "create_notifier",

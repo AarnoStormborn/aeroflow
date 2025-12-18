@@ -1,42 +1,28 @@
 """
-Configuration for notifications (CloudWatch + SNS).
+Configuration for notifications (Slack).
 """
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class CloudWatchSettings(BaseSettings):
-    """CloudWatch configuration."""
+class SlackSettings(BaseSettings):
+    """Slack configuration for notifications."""
     
-    # Enable/disable CloudWatch metrics
+    # Enable/disable Slack notifications
     enabled: bool = Field(default=True)
-    # Namespace for custom metrics
-    namespace: str = Field(default="FlightsForecasting/Ingestion")
-    # AWS region for CloudWatch
-    region: str = Field(default="us-east-1")
+    # Slack incoming webhook URL
+    webhook_url: str | None = Field(default=None)
+    # Whether to notify on success (usually False to avoid noise)
+    notify_on_success: bool = Field(default=False)
     
-    model_config = SettingsConfigDict(env_prefix="CLOUDWATCH_")
-
-
-class SNSSettings(BaseSettings):
-    """SNS configuration for notifications."""
-    
-    # Enable/disable SNS notifications
-    enabled: bool = Field(default=True)
-    # SNS Topic ARN for failure notifications
-    topic_arn: str | None = Field(default=None)
-    # AWS region for SNS
-    region: str = Field(default="us-east-1")
-    
-    model_config = SettingsConfigDict(env_prefix="SNS_")
+    model_config = SettingsConfigDict(env_prefix="SLACK_")
 
 
 class NotificationSettings(BaseSettings):
     """Main notification settings."""
     
-    cloudwatch: CloudWatchSettings = Field(default_factory=CloudWatchSettings)
-    sns: SNSSettings = Field(default_factory=SNSSettings)
+    slack: SlackSettings = Field(default_factory=SlackSettings)
     
     # Environment name (included in notifications)
     environment: str = Field(default="development")
@@ -61,8 +47,7 @@ def get_notification_settings() -> NotificationSettings:
 notification_settings = get_notification_settings()
 
 __all__ = [
-    "CloudWatchSettings",
-    "SNSSettings",
+    "SlackSettings",
     "NotificationSettings",
     "get_notification_settings",
     "notification_settings",
