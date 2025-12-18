@@ -18,6 +18,9 @@ import argparse
 from src.utils.logger import setup_logger, logger
 from src.ingestion.config import settings
 
+from dotenv import load_dotenv
+load_dotenv()
+
 
 def main():
     """Main entry point for the services."""
