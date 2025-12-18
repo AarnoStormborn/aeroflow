@@ -29,11 +29,15 @@ class OpenSkyClient:
     - Real-time state vectors (position, velocity, etc.)
     - Historical flight data
     - Aircraft metadata
+    
+    Supports OAuth2 client credentials for higher rate limits.
     """
     
     def __init__(
         self,
         base_url: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
         username: str | None = None,
         password: str | None = None,
         timeout: int | None = None,
@@ -43,22 +47,64 @@ class OpenSkyClient:
         
         Args:
             base_url: API base URL (defaults to settings)
-            username: Optional username for authentication
-            password: Optional password for authentication
+            client_id: OAuth2 client ID
+            client_secret: OAuth2 client secret
+            username: Legacy basic auth username
+            password: Legacy basic auth password
             timeout: Request timeout in seconds
         """
         self.base_url = base_url or settings.opensky.base_url
+        self.auth_url = settings.opensky.auth_url
+        self.client_id = client_id or settings.opensky.client_id
+        self.client_secret = client_secret or settings.opensky.client_secret
         self.username = username or settings.opensky.username
         self.password = password or settings.opensky.password
         self.timeout = timeout or settings.opensky.timeout_seconds
         
-        # Setup auth if credentials provided
+        # Auth headers/token
         self._auth = None
-        if self.username and self.password:
+        self._token = None
+        
+        # Try OAuth first, then fall back to basic auth
+        if self.client_id and self.client_secret:
+            self._fetch_oauth_token()
+        elif self.username and self.password:
             self._auth = (self.username, self.password)
-            logger.info("OpenSky client initialized with authentication")
+            logger.info("OpenSky client initialized with basic authentication")
         else:
             logger.info("OpenSky client initialized without authentication (lower rate limits)")
+    
+    def _fetch_oauth_token(self) -> None:
+        """Fetch OAuth2 access token using client credentials."""
+        try:
+            logger.info("Fetching OAuth2 token from OpenSky...")
+            with httpx.Client(timeout=30) as client:
+                response = client.post(
+                    self.auth_url,
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                
+                if response.status_code != 200:
+                    logger.warning(f"OAuth token fetch failed: {response.status_code} - {response.text}")
+                    logger.warning("Falling back to unauthenticated mode")
+                    return
+                
+                token_data = response.json()
+                self._token = token_data.get("access_token")
+                
+                if self._token:
+                    logger.info("OpenSky client initialized with OAuth2 authentication")
+                else:
+                    logger.warning("OAuth response missing access_token, falling back to unauthenticated")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to fetch OAuth token: {e}")
+            logger.warning("Falling back to unauthenticated mode")
     
     def _make_request(
         self,
@@ -86,8 +132,18 @@ class OpenSkyClient:
         try:
             logger.debug(f"Making request to {url} with params: {params}")
             
+            # Build headers with Bearer token if available
+            headers = {}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(url, params=params, auth=self._auth)
+                response = client.get(
+                    url,
+                    params=params,
+                    headers=headers if headers else None,
+                    auth=self._auth if not self._token else None,
+                )
             
             # Handle rate limiting
             if response.status_code == 429:
