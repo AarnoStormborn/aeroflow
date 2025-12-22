@@ -13,4 +13,6 @@ wheels/
 notebooks/
 samples/
 logs/
-data/
+/data/
+*/data/cache/
+reports/

@@ -1,21 +1,26 @@
-# Flights Forecasting Project
+# Flights Forecasting Services
 
-## Ingestion Service
+Monorepo containing microservices for flight traffic forecasting.
 
-### Local Ingestion
+## Projects
 
-To run a local ingestion test, use the following command:
+| Project | Description |
+|---------|-------------|
+| [`ingestion/`](./ingestion/) | Data ingestion from OpenSky API → S3 |
+| [`feature-engineering/`](./feature-engineering/) | Feature engineering pipeline |
+
+## Setup
+
+Each project is managed independently with its own `pyproject.toml` and virtual environment.
 
 ```bash
-python test_local_ingestion.py
+# Ingestion service
+cd ingestion
+uv sync
+uv run python main.py --run-once
+
+# Feature engineering
+cd feature-engineering
+uv sync
+uv run python main.py
 ```
-
-This will:
-1. Fetch flight data from OpenSky API for the last 2 hours
-2. Save the data to a local Parquet file in the `samples` directory
-3. Update the database with the new record
-4. Print a summary of the results
-
-### Database
-
-The database is initialized in the `data/ingestion.db` file. The schema is defined in the `src/ingestion/db/models.py` file.
