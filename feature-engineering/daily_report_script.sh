@@ -1,6 +1,7 @@
 #!/bin/bash
-# Daily report script for feature-engineering service
-# Generates and publishes daily flight analysis report
+# Daily pipeline script for feature-engineering service
+# Runs feature engineering pipeline AND report generation
+# Should be scheduled to run daily via cron
 
 set -e
 
@@ -32,8 +33,19 @@ fi
 # Install/sync dependencies
 uv sync
 
-# Run daily report (defaults to yesterday)
-echo "Starting daily report generation..."
+# 1. Run feature engineering pipeline
+echo "========================================"
+echo "Step 1: Running feature pipeline..."
+echo "========================================"
+uv run python -m src.pipeline.run "$@"
+
+# 2. Run daily report generation
+echo "========================================"
+echo "Step 2: Running daily report..."
+echo "========================================"
 uv run python -m src.features.daily_report "$@"
 
-echo "Daily report complete"
+echo "========================================"
+echo "Daily pipeline complete!"
+echo "========================================"
+
