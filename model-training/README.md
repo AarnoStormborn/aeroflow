@@ -39,13 +39,3 @@ View experiments:
 mlflow ui --backend-store-uri sqlite:///mlflow.db
 # Open http://localhost:5000
 ```
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `MLFLOW_TRACKING_URI` | MLflow backend (SQLite/Postgres) |
-| `MLFLOW_ARTIFACT_ROOT` | S3 path for artifacts |
-| `AWS_S3_BUCKET_NAME` | S3 bucket for feature data |
-| `AWS_ACCESS_KEY_ID` | AWS credentials |
-| `AWS_SECRET_ACCESS_KEY` | AWS credentials |
