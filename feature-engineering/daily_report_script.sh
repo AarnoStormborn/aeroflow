@@ -17,7 +17,7 @@ fi
 # Create virtualenv if it doesn't exist
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
-    uv venv
+    python -m venv .venv
 fi
 
 # Activate virtualenv
@@ -30,22 +30,21 @@ else
     exit 1
 fi
 
-# Install/sync dependencies
-uv sync
+# Install dependencies
+pip install -q -e .
 
 # 1. Run feature engineering pipeline
 echo "========================================"
 echo "Step 1: Running feature pipeline..."
 echo "========================================"
-uv run python -m src.pipeline.run "$@"
+python -m src.pipeline.run "$@"
 
 # 2. Run daily report generation
 echo "========================================"
 echo "Step 2: Running daily report..."
 echo "========================================"
-uv run python -m src.features.daily_report "$@"
+python -m src.features.daily_report "$@"
 
 echo "========================================"
 echo "Daily pipeline complete!"
 echo "========================================"
-

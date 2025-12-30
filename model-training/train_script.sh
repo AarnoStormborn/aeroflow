@@ -16,7 +16,7 @@ fi
 # Create virtualenv if it doesn't exist
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
-    uv venv
+    python -m venv .venv
 fi
 
 # Activate virtualenv
@@ -29,15 +29,16 @@ else
     exit 1
 fi
 
-# Install/sync dependencies
-uv sync
+# Install dependencies
+pip install -q -e .
 
 # Run training pipeline
 echo "========================================"
 echo "Starting model training..."
 echo "========================================"
-uv run python -m src.training.train "$@"
+python -m src.training.train "$@"
 
 echo "========================================"
 echo "Training complete!"
 echo "========================================"
+
