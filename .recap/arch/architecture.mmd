@@ -1,0 +1,64 @@
+flowchart TB
+    subgraph External["External APIs"]
+        OpenSky["OpenSky Network API<br/>(/states/all)"]
+        Slack["Slack Webhook"]
+    end
+
+    subgraph Storage["Storage Layer (AWS S3)"]
+        S3Raw["S3: raw/<br/>(5-min partitions)"]
+        S3Features["S3: features/hourly/<br/>(daily partitioned parquet)"]
+        S3Reports["S3: reports/daily/<br/>(PDF & JSON summary)"]
+        S3Artifacts["S3: mlflow/<br/>(models & plots)"]
+    end
+
+    subgraph IngestionService["1. Ingestion Service (Python / Polars)"]
+        Scheduler["APScheduler / CLI"]
+        Client["OpenSkyClient (OAuth2 / Basic)"]
+        LocalRepo["SQLite IngestionRepository"]
+        S3Uploader["S3Uploader"]
+        Notifier["Slack Notifier"]
+    end
+
+    subgraph FeatureService["2. Feature Engineering (Polars)"]
+        FeatureRunner["Pipeline Runner / Daily Script"]
+        DataLoader["Feature DataLoader"]
+        FeatureExtractor["Lag & Rolling Aggregators"]
+        ReportGen["ReportLab PDF & Viz Generator"]
+    end
+
+    subgraph TrainingService["3. Model Training (scikit-learn / MLflow)"]
+        TrainRunner["Train Script (14-day Rolling Window)"]
+        LinearModel["LinearRegression Forecaster"]
+        MLflowClient["MLflow Client Tracking"]
+    end
+
+    subgraph MLflowServer["MLflow Tracking Server (Docker)"]
+        MLflowApp["MLflow Server (Port 5000)"]
+        MLflowDB["SQLite Backend (mlflow.db)"]
+    end
+
+    %% Ingestion flow
+    Scheduler --> Client
+    Client -->|Poll Bounding Box| OpenSky
+    Client --> LocalRepo
+    Client --> S3Uploader
+    S3Uploader --> S3Raw
+    Client -.->|Alert on failure| Notifier
+    Notifier -.-> Slack
+
+    %% Feature Flow
+    FeatureRunner --> DataLoader
+    DataLoader -->|Read raw parquet| S3Raw
+    DataLoader --> FeatureExtractor
+    FeatureExtractor -->|Write hourly features| S3Features
+    FeatureRunner --> ReportGen
+    ReportGen -->|Upload PDF report| S3Reports
+    ReportGen -.->|Send summary card| Slack
+
+    %% Model Training Flow
+    TrainRunner -->|Read rolling window features| S3Features
+    TrainRunner --> LinearModel
+    TrainRunner --> MLflowClient
+    MLflowClient --> MLflowApp
+    MLflowApp --> MLflowDB
+    MLflowClient -->|Log model & plot artifacts| S3Artifacts

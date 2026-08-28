@@ -1,0 +1,19 @@
+flowchart LR
+    subgraph IngestionStage["1. Raw Data Ingestion (Every 10 min)"]
+        A1["OpenSky API /states/all"] -->|Fetch Mumbai Airspace BBox| A2["Parse State Vectors (Polars)"]
+        A2 -->|Partitioned by Year/Month/Day/Hour| A3["Save Parquet to S3: raw/"]
+    end
+
+    subgraph FeatureStage["2. Daily Feature Engineering (Daily 2 AM)"]
+        A3 -->|Load Day T & Day T-1| B1["Filter Airspace Bounds & Deduplicate"]
+        B1 -->|Group by Hour| B2["Calculate Hourly Aircraft Counts"]
+        B2 -->|Engineer lag_1h, lag_24h, rolling_mean_6h| B3["Export S3: features/hourly/"]
+        B2 -->|Generate daily charts & ReportLab PDF| B4["Export S3: reports/daily/ + Slack"]
+    end
+
+    subgraph TrainingStage["3. Model Training (Every 3 Days 3 AM)"]
+        B3 -->|Load 14-day Rolling Window| C1["Train/Test Split (80/20)"]
+        C1 -->|Fit Linear Regression| C2["Evaluate MAE, MAPE, R2"]
+        C2 -->|Generate forecast & residual plots| C3["Log Metrics, Model & Plots to MLflow"]
+        C3 -->|Model Registry: flight-traffic-forecaster| C4["Save Artifacts to S3: mlflow/"]
+    end

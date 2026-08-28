@@ -1,0 +1,22 @@
+flowchart TB
+    subgraph Host["Host Machine / Scheduler"]
+        CronIngest["Cron: */10 * * * *<br/>ingestion_script.sh"]
+        CronFeatures["Cron: 0 2 * * *<br/>daily_report_script.sh"]
+        CronTrain["Cron: 0 3 */3 * *<br/>train_script.sh"]
+    end
+
+    subgraph DockerEnv["Docker Compose Environment"]
+        MLflowContainer["Container: mlflow-server<br/>(mlflow:3.8.1)"]
+        LocalVol["Volume: ./mlflow_db<br/>(SQLite /app/db/mlflow.db)"]
+        MLflowContainer --- LocalVol
+    end
+
+    subgraph AWSCloud["AWS Cloud Infrastructure"]
+        S3Bucket["AWS S3 Bucket: flights-forecasting<br/>- raw/<br/>- features/hourly/<br/>- reports/daily/<br/>- mlflow/"]
+    end
+
+    CronIngest -->|Push Raw Parquet| S3Bucket
+    CronFeatures -->|Read Raw & Push Features/Reports| S3Bucket
+    CronTrain -->|Read Features & Log Runs| MLflowContainer
+    CronTrain -->|Upload Artifacts| S3Bucket
+    MLflowContainer -->|Store Metadata / Artifacts| S3Bucket
