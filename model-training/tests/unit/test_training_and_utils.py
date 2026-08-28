@@ -1,6 +1,5 @@
 """Unit tests for model training logic, evaluation metrics, and plotting."""
 
-from datetime import datetime, timedelta
 import numpy as np
 import polars as pl
 import pytest
@@ -68,11 +67,9 @@ def test_plot_feature_importance():
 
 def test_plot_forecast_with_ci():
     """Test confidence interval forecast visualization."""
-    base_dt = datetime(2025, 12, 28, 0, 0, 0)
-    dates = [base_dt + timedelta(hours=i) for i in range(10)]
     y_true = np.linspace(10, 20, 10)
     y_pred = y_true + np.random.normal(0, 0.5, 10)
     
-    fig = plot_forecast_with_ci(dates, y_true, y_pred, title="Test Forecast CI")
+    fig = plot_forecast_with_ci(y_true, y_pred, mape=0.106, title="Test Forecast CI")
     assert fig is not None
     assert len(fig.axes) == 1
