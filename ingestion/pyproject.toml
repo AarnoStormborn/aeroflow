@@ -17,12 +17,15 @@ dependencies = [
     "apscheduler>=3.11.1",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "jupyter",
     "pytest",
-    "ruff"
+    "ruff",
 ]
+
+[tool.uv]
+package = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

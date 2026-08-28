@@ -1,13 +1,10 @@
 """
 Feature engineering entry point.
+
+Delegates to the real pipeline runner in src/pipeline/run.py.
 """
 
-from src.features import __version__
-
-
-def main():
-    print(f"Feature Engineering v{__version__}")
-    print("TODO: Implement feature engineering pipeline")
+from src.pipeline.run import main
 
 
 if __name__ == "__main__":
