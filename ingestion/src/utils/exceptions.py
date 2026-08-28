@@ -10,7 +10,7 @@ Provides a hierarchy of exceptions for different error scenarios:
 
 class FlightServiceError(Exception):
     """Base exception for all flight service errors."""
-    
+
     def __init__(self, message: str, *args, **kwargs):
         self.message = message
         super().__init__(message, *args, **kwargs)
@@ -27,7 +27,7 @@ class APIError(FlightServiceError):
 
 class OpenSkyAPIError(APIError):
     """Error when communicating with the OpenSky API."""
-    
+
     def __init__(self, message: str, status_code: int | None = None, response_body: str | None = None):
         self.status_code = status_code
         self.response_body = response_body
@@ -36,7 +36,7 @@ class OpenSkyAPIError(APIError):
 
 class RateLimitError(APIError):
     """Error when API rate limit is exceeded."""
-    
+
     def __init__(self, message: str = "API rate limit exceeded", retry_after: int | None = None):
         self.retry_after = retry_after
         super().__init__(message)
@@ -49,7 +49,7 @@ class APIConnectionError(APIError):
 
 class APITimeoutError(APIError):
     """Error when API request times out."""
-    
+
     def __init__(self, message: str = "API request timed out", timeout: int | None = None):
         self.timeout = timeout
         if timeout:
@@ -73,7 +73,7 @@ class S3Error(StorageError):
 
 class S3UploadError(S3Error):
     """Error when uploading to S3 fails."""
-    
+
     def __init__(self, message: str, bucket: str | None = None, key: str | None = None):
         self.bucket = bucket
         self.key = key
@@ -120,7 +120,7 @@ class ConfigurationError(FlightServiceError):
 
 class MissingConfigError(ConfigurationError):
     """Error when required configuration is missing."""
-    
+
     def __init__(self, config_key: str):
         self.config_key = config_key
         super().__init__(f"Missing required configuration: {config_key}")
@@ -132,7 +132,7 @@ __all__ = [
     "FlightServiceError",
     # API
     "APIError",
-    "OpenSkyAPIError", 
+    "OpenSkyAPIError",
     "RateLimitError",
     "APIConnectionError",
     "APITimeoutError",

@@ -12,48 +12,47 @@ All failures are captured with appropriate error messages and status.
 
 import traceback
 from datetime import datetime, timezone
-from typing import Callable
 
-from src.utils import logger
-from src.utils.exceptions import (
-    FlightServiceError,
-    OpenSkyAPIError,
-    RateLimitError,
-    APIConnectionError,
-    APITimeoutError,
-    S3UploadError,
-    S3ConfigurationError,
-    ParquetError,
-    DatabaseError,
-    ConfigurationError,
-)
-from src.ingestion.config import settings
 from src.ingestion.components.client import OpenSkyClient, create_client
 from src.ingestion.components.s3_uploader import S3Uploader, create_uploader
-from src.notifications import get_notifier
+from src.ingestion.config import settings
 from src.ingestion.db import (
+    IngestionRecord,
     IngestionRepository,
     IngestionStatus,
-    IngestionRecord,
     create_repository,
+)
+from src.notifications import get_notifier
+from src.utils import logger
+from src.utils.exceptions import (
+    APIConnectionError,
+    APITimeoutError,
+    ConfigurationError,
+    DatabaseError,
+    FlightServiceError,
+    OpenSkyAPIError,
+    ParquetError,
+    RateLimitError,
+    S3ConfigurationError,
+    S3UploadError,
 )
 
 
 class IngestionJob:
     """
     Main ingestion job that orchestrates the data pipeline.
-    
+
     Workflow:
     1. Create pending ingestion record
     2. Fetch state vectors from OpenSky API (with bounding box)
     3. Convert to Parquet and upload to S3
     4. Update ingestion record with results
-    
+
     All failures are captured in the database with:
     - status = FAILED
     - error_message = Detailed error description
     """
-    
+
     def __init__(
         self,
         client: OpenSkyClient | None = None,
@@ -62,12 +61,12 @@ class IngestionJob:
     ):
         """
         Initialize the ingestion job.
-        
+
         Args:
             client: OpenSky API client (created if not provided)
             uploader: S3 uploader (created if not provided)
             repository: Ingestion record repository (created if not provided)
-            
+
         Raises:
             ConfigurationError: If components cannot be initialized
         """
@@ -75,23 +74,23 @@ class IngestionJob:
             self.client = client or create_client()
         except Exception as e:
             raise ConfigurationError(f"Failed to initialize OpenSky client: {e}")
-        
+
         try:
             self.uploader = uploader or create_uploader()
         except Exception as e:
             raise ConfigurationError(f"Failed to initialize S3 uploader: {e}")
-        
+
         try:
             self.repository = repository or create_repository()
         except Exception as e:
             raise ConfigurationError(f"Failed to initialize database repository: {e}")
-        
+
         logger.info("IngestionJob initialized successfully")
-    
+
     def _categorize_error(self, error: Exception) -> tuple[str, str]:
         """
         Categorize an error for logging and storage.
-        
+
         Returns:
             Tuple of (error_category, error_message)
         """
@@ -128,26 +127,26 @@ class IngestionJob:
         else:
             category = "UNEXPECTED"
             message = f"Unexpected error ({type(error).__name__}): {error}"
-        
+
         return category, message
-    
+
     def run(self) -> IngestionRecord:
         """
         Run the states ingestion pipeline.
-        
+
         Returns:
             IngestionRecord with the result (status will be SUCCESS or FAILED)
-            
+
         The method never raises exceptions - all errors are captured in
         the returned record's status and error_message fields.
         """
         logger.info("Starting states ingestion job")
-        
+
         now = datetime.now(timezone.utc)
         bbox = settings.opensky.bounding_box
-        
+
         logger.info(f"Fetching states for region: lamin={bbox[0]}, lomin={bbox[1]}, lamax={bbox[2]}, lomax={bbox[3]}")
-        
+
         # Create pending record
         try:
             record = self.repository.create_record(
@@ -168,12 +167,12 @@ class IngestionJob:
                 status=IngestionStatus.FAILED,
                 error_message=f"Failed to create tracking record: {e}",
             )
-        
+
         try:
             # Step 1: Fetch states from API with bounding box
             logger.info("Step 1/3: Fetching state vectors from OpenSky API...")
             states_response = self.client.get_states(bounding_box=bbox)
-            
+
             states = states_response.get("states", [])
             if not states:
                 logger.warning("No state vectors returned from API (empty response)")
@@ -182,18 +181,18 @@ class IngestionJob:
                     record_count=0,
                     status=IngestionStatus.SUCCESS,
                 )
-            
+
             logger.info(f"Step 1/3: Fetched {len(states)} state vectors")
-            
+
             # Step 2: Convert to Parquet and upload to S3
             logger.info("Step 2/3: Converting to Parquet and uploading to S3...")
             s3_path, record_count = self.uploader.upload_states(
                 states_response=states_response,
                 timestamp=now,
             )
-            
+
             logger.info(f"Step 2/3: Uploaded {record_count} records to {s3_path}")
-            
+
             # Step 3: Update record with success
             logger.info("Step 3/3: Updating ingestion record...")
             updated_record = self.repository.update_record(
@@ -202,9 +201,9 @@ class IngestionJob:
                 record_count=record_count,
                 status=IngestionStatus.SUCCESS,
             )
-            
+
             logger.info(f"Ingestion complete: {record_count} records stored at {s3_path}")
-            
+
             # Send success notification (metrics only, no alert)
             try:
                 duration = (datetime.now(timezone.utc) - now).total_seconds()
@@ -216,16 +215,16 @@ class IngestionJob:
                 )
             except Exception as notify_error:
                 logger.warning(f"Failed to send success notification: {notify_error}")
-            
+
             return updated_record
-            
+
         except Exception as e:
             # Categorize and log the error
             category, message = self._categorize_error(e)
-            
+
             logger.error(f"Ingestion FAILED [{category}]: {message}")
             logger.debug(f"Full traceback:\n{traceback.format_exc()}")
-            
+
             # Send failure notification (metrics + SNS alert)
             try:
                 duration = (datetime.now(timezone.utc) - now).total_seconds()
@@ -237,7 +236,7 @@ class IngestionJob:
                 )
             except Exception as notify_error:
                 logger.warning(f"Failed to send failure notification: {notify_error}")
-            
+
             # Update record with failure
             try:
                 return self.repository.update_record(
@@ -263,10 +262,10 @@ class IngestionJob:
 def run_ingestion() -> IngestionRecord:
     """
     Run a single ingestion cycle.
-    
+
     Returns:
         IngestionRecord with the result
-        
+
     Never raises exceptions - all errors are captured in the returned record.
     """
     try:

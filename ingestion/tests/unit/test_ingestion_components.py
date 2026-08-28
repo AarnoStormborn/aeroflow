@@ -1,28 +1,17 @@
 """Unit tests for OpenSky client, local storage, and failure capture."""
 
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
 import tempfile
-from pathlib import Path
-import polars as pl
-import pytest
+from unittest.mock import patch
 
 from src.ingestion.components.client import OpenSkyClient
 from src.ingestion.components.local_storage import LocalStorage
-from src.ingestion.db import IngestionRepository, IngestionStatus
-from src.utils.exceptions import (
-    RateLimitError,
-    APIConnectionError,
-    APITimeoutError,
-    S3UploadError,
-)
 
 
 def test_local_storage_states_to_dataframe():
     """Test parsing raw OpenSky state vector array into typed Polars DataFrame."""
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = LocalStorage(base_dir=tmpdir)
-        
+
         mock_states_response = {
             "time": 1766880000,
             "states": [
@@ -48,9 +37,9 @@ def test_local_storage_states_to_dataframe():
                 ]
             ]
         }
-        
+
         df = storage.states_to_dataframe(mock_states_response)
-        
+
         assert len(df) == 1
         assert "icao24" in df.columns
         assert "callsign" in df.columns
@@ -64,15 +53,15 @@ def test_local_storage_states_to_dataframe():
 def test_opensky_client_bounding_box_param():
     """Test client URL formatting with bounding box."""
     client = OpenSkyClient(base_url="https://opensky-network.org/api")
-    
+
     with patch("httpx.Client.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"time": 1234567890, "states": []}
-        
+
         # lamin, lomin, lamax, lomax
         bbox = (18.0, 71.5, 20.0, 74.0)
         res = client.get_states(bounding_box=bbox)
-        
+
         assert res["states"] == []
         mock_get.assert_called_once()
         params = mock_get.call_args[1].get("params", {})

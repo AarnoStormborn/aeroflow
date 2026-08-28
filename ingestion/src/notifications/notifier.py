@@ -4,12 +4,10 @@ Main notifier that sends Slack alerts.
 Provides a unified interface for sending notifications.
 """
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from src.utils import logger
-from src.notifications.config import notification_settings
 from src.notifications.slack import SlackNotifier, create_slack_notifier
+from src.utils import logger
 
 if TYPE_CHECKING:
     from src.ingestion.db import IngestionRecord
@@ -18,24 +16,24 @@ if TYPE_CHECKING:
 class IngestionNotifier:
     """
     Unified notifier for ingestion events.
-    
+
     Sends Slack notifications for failures (and optionally successes).
     """
-    
+
     def __init__(
         self,
         slack: SlackNotifier | None = None,
     ):
         """
         Initialize the notifier.
-        
+
         Args:
             slack: Slack notifier (created if not provided)
         """
         self.slack = slack or create_slack_notifier()
-        
+
         logger.info("IngestionNotifier initialized")
-    
+
     def on_success(
         self,
         record_id: int | None,
@@ -45,7 +43,7 @@ class IngestionNotifier:
     ) -> None:
         """
         Handle successful ingestion.
-        
+
         Args:
             record_id: Database record ID
             record_count: Number of records ingested
@@ -53,14 +51,14 @@ class IngestionNotifier:
             duration_seconds: Time taken for ingestion
         """
         logger.info(f"Recording success: {record_count} records")
-        
+
         # Only notify on success if configured (usually disabled)
         self.slack.notify_success(
             record_count=record_count,
             s3_path=s3_path,
             duration_seconds=duration_seconds,
         )
-    
+
     def on_failure(
         self,
         record_id: int | None,
@@ -70,7 +68,7 @@ class IngestionNotifier:
     ) -> None:
         """
         Handle failed ingestion.
-        
+
         Args:
             record_id: Database record ID
             error_category: Category of the error
@@ -78,14 +76,14 @@ class IngestionNotifier:
             duration_seconds: Time taken before failure
         """
         logger.error(f"Recording failure: [{error_category}] {error_message}")
-        
+
         # Send Slack notification
         self.slack.notify_failure(
             error_category=error_category,
             error_message=error_message,
             record_id=record_id,
         )
-    
+
     def notify_from_record(
         self,
         record: "IngestionRecord",
@@ -93,13 +91,13 @@ class IngestionNotifier:
     ) -> None:
         """
         Send notifications based on an ingestion record.
-        
+
         Args:
             record: The ingestion record
             duration_seconds: Time taken for the ingestion
         """
         from src.ingestion.db import IngestionStatus
-        
+
         if record.status == IngestionStatus.SUCCESS:
             self.on_success(
                 record_id=record.id,
@@ -116,7 +114,7 @@ class IngestionNotifier:
             else:
                 category = "UNKNOWN"
                 message = error_message
-            
+
             self.on_failure(
                 record_id=record.id,
                 error_category=category,

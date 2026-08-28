@@ -10,11 +10,11 @@ This module provides:
 Quick start:
     from src.ingestion import start_scheduler
     start_scheduler()  # Start the scheduled ingestion
-    
+
 One-time run:
     from src.ingestion import run_ingestion
     result = run_ingestion()  # Run a single ingestion
-    
+
 Configuration (environment variables):
     SCHEDULER_INTERVAL_SECONDS: Polling interval (default: 60)
     OPENSKY_BBOX_LAMIN/LOMIN/LAMAX/LOMAX: Region bounding box
@@ -22,24 +22,24 @@ Configuration (environment variables):
     AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY: AWS credentials
 """
 
-from src.ingestion.config import settings, get_settings
 from src.ingestion.components import (
     OpenSkyClient,
-    create_client,
     S3Uploader,
+    create_client,
     create_uploader,
 )
+from src.ingestion.config import get_settings, settings
 from src.ingestion.db import (
-    IngestionStatus,
     IngestionRecord,
     IngestionRepository,
+    IngestionStatus,
     create_repository,
 )
 from src.ingestion.jobs import (
     IngestionJob,
-    run_ingestion,
     IngestionScheduler,
     create_scheduler,
+    run_ingestion,
     start_scheduler,
 )
 

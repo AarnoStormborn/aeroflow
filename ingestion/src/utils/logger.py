@@ -3,7 +3,7 @@ Loguru-based logging configuration for the flights-forecasting services.
 
 Usage:
     from src.utils.logger import logger
-    
+
     logger.info("Processing data...")
     logger.error("Something went wrong", exc_info=True)
 """
@@ -44,7 +44,7 @@ def setup_logger(
 ) -> None:
     """
     Configure the logger with stdout and file handlers.
-    
+
     Args:
         log_level: Minimum log level to capture (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_dir: Directory to store log files
@@ -56,7 +56,7 @@ def setup_logger(
     """
     # Remove any existing handlers
     logger.remove()
-    
+
     # Add stdout handler with color formatting
     if enable_stdout:
         logger.add(
@@ -67,12 +67,12 @@ def setup_logger(
             backtrace=True,
             diagnose=True,
         )
-    
+
     # Add file handler with rotation
     if enable_file:
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
-        
+
         logger.add(
             log_path / log_file,
             format=FILE_LOG_FORMAT,
@@ -84,7 +84,7 @@ def setup_logger(
             diagnose=True,
             enqueue=True,  # Thread-safe logging
         )
-    
+
     logger.info(f"Logger initialized with level={log_level}")
 
 

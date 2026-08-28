@@ -1,12 +1,12 @@
 """Configuration module for the ingestion service."""
 
 from src.ingestion.config.config import (
-    Settings,
+    DatabaseSettings,
+    LoggingSettings,
     OpenSkySettings,
     S3Settings,
-    DatabaseSettings,
     SchedulerSettings,
-    LoggingSettings,
+    Settings,
     get_settings,
     settings,
 )

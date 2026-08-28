@@ -1,9 +1,9 @@
 """Database module for the ingestion service."""
 
 from src.ingestion.db.models import (
-    IngestionStatus,
     IngestionRecord,
     IngestionRepository,
+    IngestionStatus,
     create_repository,
 )
 
