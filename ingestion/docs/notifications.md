@@ -2,7 +2,7 @@
 
 ## Overview
 
-The notifications system provides observability into the ingestion pipeline through CloudWatch metrics (monitoring) and SNS alerts (alerting).
+The notifications system provides observability into the ingestion pipeline by sending **Discord alerts** (via webhook) when ingestion fails.
 
 ---
 
@@ -12,7 +12,7 @@ The notifications system provides observability into the ingestion pipeline thro
 
 Failures happen. We need to:
 1. **Know when things break** - Immediate awareness of failures
-2. **Understand patterns** - Historical view of success/failure rates
+2. **Understand patterns** - Historical view of success/failure rates (via ingestion DB records)
 3. **Minimize noise** - Alert on actionable issues, not every hiccup
 4. **Enable automation** - Allow downstream actions on alerts
 
@@ -22,37 +22,24 @@ Failures happen. We need to:
 
 **Question**: Should we poll for failures or push notifications?
 
-**Answer**: Push-based via SNS.
+**Answer**: Push-based via Discord webhook.
 
 *Reasoning*:
 - Immediate awareness (no polling delay)
-- SNS handles delivery to multiple channels (email, SMS, Lambda, etc.)
-- Built-in retry logic for delivery failures
+- Webhooks are simple HTTP POSTs — no SDK/infra needed
+- Discord is free and works on desktop + mobile
 - Decouples notification logic from ingestion logic
 
-#### 2. CloudWatch vs Custom Metrics Store
+#### 2. Failure Alerts Only vs Success Too
 
-**Question**: Where should we store metrics?
+**Question**: Alert on failures, successes, or both?
 
-**Answer**: AWS CloudWatch.
-
-*Reasoning*:
-- Native integration with AWS ecosystem
-- Built-in dashboarding and alarming
-- No infrastructure to manage
-- Standard for AWS-hosted applications
-- Can trigger alarms automatically
-
-#### 3. Per-Failure Alerts vs Aggregated
-
-**Question**: Alert on every failure or aggregate?
-
-**Answer**: Both - immediate email + aggregated metrics.
+**Answer**: **Failures only.**
 
 *Reasoning*:
-- **Email per failure**: For immediate visibility during development
-- **CloudWatch metrics**: For trend analysis ("3 failures in 10 minutes")
-- Can configure CloudWatch Alarms for sophisticated alert logic later
+- Success is the expected steady state — alerting on it creates noise
+- Ingestion records are persisted in SQLite with status, so success/failure history is queryable
+- Failures are the actionable signal ("something is broken")
 
 ---
 
@@ -61,32 +48,14 @@ Failures happen. We need to:
 ```
 ┌─────────────────┐
 │  Ingestion Job  │
-│   (on success)  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│   CloudWatch    │     │   (No Alert)    │
-│ IngestionSuccess│     │                 │
-│ RecordCount     │     │                 │
-│ Duration        │     │                 │
-└─────────────────┘     └─────────────────┘
-
-┌─────────────────┐
-│  Ingestion Job  │
 │   (on failure)  │
 └────────┬────────┘
          │
-         ├──────────────────┐
-         ▼                  ▼
-┌─────────────────┐  ┌─────────────────┐
-│   CloudWatch    │  │      SNS        │
-│ IngestionFailure│  │   Topic         │
-│ FailureByCategory│  │                │
-│ Duration        │  │    ┌───────┐    │
-└─────────────────┘  │    │ Email │    │
-                     │    └───────┘    │
-                     └─────────────────┘
+         ▼
+┌─────────────────┐
+│     Discord     │
+│    Webhook      │
+└─────────────────┘
 ```
 
 ---
@@ -99,50 +68,38 @@ Centralized settings for notifications:
 
 ```python
 # Environment variables
-CLOUDWATCH_ENABLED=true
-CLOUDWATCH_NAMESPACE=FlightsForecasting/Ingestion
-
-SNS_ENABLED=true
-SNS_TOPIC_ARN=arn:aws:sns:us-east-1:ACCOUNT:flights-ingestion-alerts
+DISCORD_ENABLED=true
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
 NOTIFY_ENVIRONMENT=production
 NOTIFY_SERVICE_NAME=ingestion-service
 ```
 
-### 2. CloudWatch Publisher (`src/notifications/cloudwatch.py`)
+### 2. Discord Notifier (`src/notifications/discord.py`)
 
-Publishes custom metrics:
+Sends failure alerts as Discord **embeds** with:
+- **Title**: `🚨 Ingestion Failed`
+- **Color**: Red (`0xFF0000`)
+- **Fields**: Environment, Service, Error Category, Record ID, Error Message
+- **Footer**: UTC timestamp
 
-| Metric | Dimensions | Unit |
-|--------|------------|------|
-| `IngestionSuccess` | Environment, Service | Count |
-| `IngestionFailure` | Environment, Service | Count |
-| `IngestionFailureByCategory` | Environment, Service, ErrorCategory | Count |
-| `IngestionRecordCount` | Environment, Service | Count |
-| `IngestionDuration` | Environment, Service | Seconds |
+Example message:
 
-### 3. SNS Notifier (`src/notifications/sns.py`)
-
-Sends email alerts with:
-- **Subject**: `[ENVIRONMENT] Ingestion Failed: CATEGORY`
-- **Body**: Timestamp, error details, record ID
-- **Attributes**: For message filtering
-
-Example email:
 ```
-🚨 INGESTION FAILURE ALERT
+🚨 Ingestion Failed
 
 Environment: production
 Service: ingestion-service
-Timestamp: 2025-12-18T01:02:00+00:00
-
 Error Category: API_CONNECTION
-Error Message: Failed to connect to OpenSky API
-
 Record ID: 42
+
+Error Message:
+Failed to connect to OpenSky API
+
+⏰ 2025-12-18 01:02:00 UTC
 ```
 
-### 4. Unified Notifier (`src/notifications/notifier.py`)
+### 3. Unified Notifier (`src/notifications/notifier.py`)
 
 Single interface used by the ingestion job:
 
@@ -151,61 +108,20 @@ from src.notifications import get_notifier
 
 notifier = get_notifier()
 
-# On success (metrics only)
-notifier.on_success(record_id=1, record_count=26, s3_path="s3://...", duration_seconds=3.5)
-
-# On failure (metrics + email)
+# On failure (sends Discord alert)
 notifier.on_failure(record_id=2, error_category="API_TIMEOUT", error_message="...")
 ```
 
+On success, `notify_from_record` simply logs (no alert) — success is the expected state.
+
 ---
 
-## AWS Setup
+## Discord Setup
 
-### Required Services
-
-1. **SNS Topic** - For email delivery
-2. **Email Subscription** - Confirm to receive alerts
-3. **IAM Permissions** - `sns:Publish` + `cloudwatch:PutMetricData`
-
-### IAM Policy
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": ["sns:Publish"],
-            "Resource": "arn:aws:sns:us-east-1:*:flights-ingestion-alerts"
-        },
-        {
-            "Effect": "Allow",
-            "Action": ["cloudwatch:PutMetricData"],
-            "Resource": "*"
-        }
-    ]
-}
-```
-
-### Creating SNS Topic
-
-```python
-import boto3
-sns = boto3.client('sns', region_name='us-east-1')
-
-# Create topic
-response = sns.create_topic(Name='flights-ingestion-alerts')
-topic_arn = response['TopicArn']
-
-# Subscribe email
-sns.subscribe(
-    TopicArn=topic_arn,
-    Protocol='email',
-    Endpoint='your@email.com'
-)
-# Check email and confirm subscription!
-```
+1. Open your Discord server → **Server Settings** → **Integrations** → **Webhooks**
+2. Click **New Webhook**, name it (e.g. `ingestion-alerts`), pick a channel
+3. Copy the **Webhook URL**
+4. Set it as `DISCORD_WEBHOOK_URL` in your environment
 
 ---
 
@@ -213,12 +129,8 @@ sns.subscribe(
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `CLOUDWATCH_ENABLED` | `true` | Enable metrics publishing |
-| `CLOUDWATCH_NAMESPACE` | `FlightsForecasting/Ingestion` | Metric namespace |
-| `CLOUDWATCH_REGION` | `us-east-1` | AWS region |
-| `SNS_ENABLED` | `true` | Enable email alerts |
-| `SNS_TOPIC_ARN` | - | SNS topic ARN (required) |
-| `SNS_REGION` | `us-east-1` | AWS region |
+| `DISCORD_ENABLED` | `true` | Enable Discord notifications |
+| `DISCORD_WEBHOOK_URL` | - | Discord webhook URL (required to send) |
 | `NOTIFY_ENVIRONMENT` | `development` | Included in alerts |
 | `NOTIFY_SERVICE_NAME` | `ingestion-service` | Included in alerts |
 
@@ -226,38 +138,22 @@ sns.subscribe(
 
 ## Extending Notifications
 
-### Adding Slack
+### Adding another channel (e.g. Telegram)
+
+The notifier is structured so each channel is a self-contained class implementing `notify_failure(...)`:
 
 ```python
-# In src/notifications/slack.py
-class SlackNotifier:
-    def __init__(self, webhook_url: str):
-        self.webhook_url = webhook_url
-    
-    def notify_failure(self, category: str, message: str):
-        requests.post(self.webhook_url, json={
-            "text": f"🚨 *Ingestion Failed*\n*Category*: {category}\n{message}"
-        })
+# In src/notifications/telegram.py
+class TelegramNotifier:
+    def __init__(self, bot_token: str, chat_id: str):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+
+    def notify_failure(self, error_category: str, error_message: str, record_id: int | None = None):
+        ...
 ```
 
-### CloudWatch Alarms
-
-Create an alarm for consecutive failures:
-
-```python
-cloudwatch = boto3.client('cloudwatch')
-cloudwatch.put_metric_alarm(
-    AlarmName='IngestionFailureAlarm',
-    MetricName='IngestionFailure',
-    Namespace='FlightsForecasting/Ingestion',
-    Statistic='Sum',
-    Period=300,  # 5 minutes
-    EvaluationPeriods=1,
-    Threshold=3,  # 3 failures in 5 minutes
-    ComparisonOperator='GreaterThanOrEqualToThreshold',
-    AlarmActions=[SNS_TOPIC_ARN],
-)
-```
+Then wire it into `IngestionNotifier` alongside (or instead of) `DiscordNotifier`.
 
 ---
 

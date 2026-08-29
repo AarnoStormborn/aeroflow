@@ -1,12 +1,12 @@
 """
-Main notifier that sends Slack alerts.
+Main notifier that sends Discord alerts.
 
 Provides a unified interface for sending notifications.
 """
 
 from typing import TYPE_CHECKING
 
-from src.notifications.slack import SlackNotifier, create_slack_notifier
+from src.notifications.discord import DiscordNotifier, create_discord_notifier
 from src.utils import logger
 
 if TYPE_CHECKING:
@@ -17,47 +17,22 @@ class IngestionNotifier:
     """
     Unified notifier for ingestion events.
 
-    Sends Slack notifications for failures (and optionally successes).
+    Sends Discord notifications for failures.
     """
 
     def __init__(
         self,
-        slack: SlackNotifier | None = None,
+        discord: DiscordNotifier | None = None,
     ):
         """
         Initialize the notifier.
 
         Args:
-            slack: Slack notifier (created if not provided)
+            discord: Discord notifier (created if not provided)
         """
-        self.slack = slack or create_slack_notifier()
+        self.discord = discord or create_discord_notifier()
 
         logger.info("IngestionNotifier initialized")
-
-    def on_success(
-        self,
-        record_id: int | None,
-        record_count: int,
-        s3_path: str | None,
-        duration_seconds: float | None = None,
-    ) -> None:
-        """
-        Handle successful ingestion.
-
-        Args:
-            record_id: Database record ID
-            record_count: Number of records ingested
-            s3_path: S3 path where data was stored
-            duration_seconds: Time taken for ingestion
-        """
-        logger.info(f"Recording success: {record_count} records")
-
-        # Only notify on success if configured (usually disabled)
-        self.slack.notify_success(
-            record_count=record_count,
-            s3_path=s3_path,
-            duration_seconds=duration_seconds,
-        )
 
     def on_failure(
         self,
@@ -77,8 +52,8 @@ class IngestionNotifier:
         """
         logger.error(f"Recording failure: [{error_category}] {error_message}")
 
-        # Send Slack notification
-        self.slack.notify_failure(
+        # Send Discord notification
+        self.discord.notify_failure(
             error_category=error_category,
             error_message=error_message,
             record_id=record_id,
@@ -98,14 +73,7 @@ class IngestionNotifier:
         """
         from src.ingestion.db import IngestionStatus
 
-        if record.status == IngestionStatus.SUCCESS:
-            self.on_success(
-                record_id=record.id,
-                record_count=record.record_count,
-                s3_path=record.s3_path,
-                duration_seconds=duration_seconds,
-            )
-        elif record.status == IngestionStatus.FAILED:
+        if record.status == IngestionStatus.FAILED:
             # Extract category from error message if present
             error_message = record.error_message or "Unknown error"
             if error_message.startswith("[") and "]" in error_message:
@@ -120,6 +88,11 @@ class IngestionNotifier:
                 error_category=category,
                 error_message=message,
                 duration_seconds=duration_seconds,
+            )
+        elif record.status == IngestionStatus.SUCCESS:
+            logger.info(
+                f"Ingestion success (record {record.id}): "
+                f"{record.record_count} records → {record.s3_path}"
             )
 
 

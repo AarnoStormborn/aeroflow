@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     # Local cache directory for downloaded data
     cache_dir: str = Field(default="data/cache")
 
-    # Slack webhook for notifications
-    slack_webhook_url: str | None = Field(default=None, validation_alias="SLACK_WEBHOOK_URL")
+    # Discord webhook for notifications
+    discord_webhook_url: str | None = Field(default=None, validation_alias="DISCORD_WEBHOOK_URL")
 
     model_config = SettingsConfigDict(env_prefix="FE_", populate_by_name=True)
 

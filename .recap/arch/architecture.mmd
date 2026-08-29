@@ -1,7 +1,7 @@
 flowchart TB
     subgraph External["External APIs"]
         OpenSky["OpenSky Network API<br/>(/states/all)"]
-        Slack["Slack Webhook"]
+        Discord["Discord Webhook"]
     end
 
     subgraph Storage["Storage Layer (AWS S3)"]
@@ -16,7 +16,7 @@ flowchart TB
         Client["OpenSkyClient (OAuth2 / Basic)"]
         LocalRepo["SQLite IngestionRepository"]
         S3Uploader["S3Uploader"]
-        Notifier["Slack Notifier"]
+        Notifier["Discord Notifier"]
     end
 
     subgraph FeatureService["2. Feature Engineering (Polars)"]
@@ -44,7 +44,7 @@ flowchart TB
     Client --> S3Uploader
     S3Uploader --> S3Raw
     Client -.->|Alert on failure| Notifier
-    Notifier -.-> Slack
+    Notifier -.-> Discord
 
     %% Feature Flow
     FeatureRunner --> DataLoader
@@ -53,7 +53,7 @@ flowchart TB
     FeatureExtractor -->|Write hourly features| S3Features
     FeatureRunner --> ReportGen
     ReportGen -->|Upload PDF report| S3Reports
-    ReportGen -.->|Send summary card| Slack
+    ReportGen -.->|Send summary card| Discord
 
     %% Model Training Flow
     TrainRunner -->|Read rolling window features| S3Features

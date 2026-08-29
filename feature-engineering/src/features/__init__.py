@@ -3,7 +3,7 @@ Feature engineering module for flight traffic forecasting.
 
 Submodules:
 - data: Load and clean flight data from S3
-- report: Generate PDF reports, upload to S3, send Slack notifications
+- report: Generate PDF reports, upload to S3, send Discord notifications
 
 Scripts:
 - analyze: Run data analysis for a specific day
@@ -23,12 +23,12 @@ from src.features.data import (
     get_data_summary,
 )
 from src.features.report import (
+    DiscordNotifier,
     PDFReportGenerator,
     ReportUploader,
-    SlackNotifier,
     create_analysis_report,
+    create_discord_notifier,
     create_report_generator,
-    create_slack_notifier,
     create_uploader,
     plot_altitude_distribution,
     plot_geographic_distribution,
@@ -55,6 +55,6 @@ __all__ = [
     "create_report_generator",
     "ReportUploader",
     "create_uploader",
-    "SlackNotifier",
-    "create_slack_notifier",
+    "DiscordNotifier",
+    "create_discord_notifier",
 ]

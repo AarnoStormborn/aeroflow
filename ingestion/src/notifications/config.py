@@ -1,28 +1,26 @@
 """
-Configuration for notifications (Slack).
+Configuration for notifications (Discord).
 """
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class SlackSettings(BaseSettings):
-    """Slack configuration for notifications."""
+class DiscordSettings(BaseSettings):
+    """Discord configuration for notifications."""
 
-    # Enable/disable Slack notifications
+    # Enable/disable Discord notifications
     enabled: bool = Field(default=True)
-    # Slack incoming webhook URL
+    # Discord webhook URL
     webhook_url: str | None = Field(default=None)
-    # Whether to notify on success (usually False to avoid noise)
-    notify_on_success: bool = Field(default=False)
 
-    model_config = SettingsConfigDict(env_prefix="SLACK_")
+    model_config = SettingsConfigDict(env_prefix="DISCORD_")
 
 
 class NotificationSettings(BaseSettings):
     """Main notification settings."""
 
-    slack: SlackSettings = Field(default_factory=SlackSettings)
+    discord: DiscordSettings = Field(default_factory=DiscordSettings)
 
     # Environment name (included in notifications)
     environment: str = Field(default="development")
@@ -47,7 +45,7 @@ def get_notification_settings() -> NotificationSettings:
 notification_settings = get_notification_settings()
 
 __all__ = [
-    "SlackSettings",
+    "DiscordSettings",
     "NotificationSettings",
     "get_notification_settings",
     "notification_settings",

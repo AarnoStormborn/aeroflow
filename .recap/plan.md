@@ -12,7 +12,7 @@
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| 1. OpenSky Data Ingestion & Storage | Done | Ingestion client, SQLite tracking, S3 uploader, scheduler, and Slack notifications complete. |
+| 1. OpenSky Data Ingestion & Storage | Done | Ingestion client, SQLite tracking, S3 uploader, scheduler, and Discord notifications complete. |
 | 2. Feature Engineering & Daily Reporting | Done | Hourly aggregation, lag features (`lag_1h`, `lag_24h`, `rolling_mean_6h`), PDF & chart generation complete. |
 | 3. Model Training & MLflow Infrastructure | Done | 14-day rolling training pipeline, metric logging, MLflow Docker container setup complete. |
 | 4. Test Coverage & Quality Assurance | In Progress | Ingestion pipeline tests active (6 tests passing); tests for feature engineering and model training need test suites written. |
@@ -21,7 +21,7 @@
 ## Done
 
 - [x] Ingestion service with OpenSky API client, SQLite state tracking, and S3 parquet persistence (`d7a8023`, `1c296c4`, `7cfa429`)
-- [x] Slack webhook failure and status notification system (`9a79410`, `248bb52`)
+- [x] Discord webhook failure and status notification system (`9a79410`, `248bb52`)
 - [x] Feature engineering pipeline with multi-day lag extraction and ReportLab daily PDF reporting (`60aa125`, `2af89a5`, `5d7feaa`)
 - [x] Model training pipeline with scikit-learn regression and diagnostic plot exports (`23ada0c`)
 - [x] MLflow Docker container and compose configuration with S3 artifact backend (`de101af`, `ae4530c`)
@@ -40,7 +40,7 @@
 
 ## Known risks & blockers
 
-- **OpenSky API Rate Limiting**: Anonymous or low-tier OpenSky API access can hit rate limits or downtime. *Mitigation: OAuth/Basic authentication implemented with exponential backoff and Slack alerting.*
+- **OpenSky API Rate Limiting**: Anonymous or low-tier OpenSky API access can hit rate limits or downtime. *Mitigation: OAuth/Basic authentication implemented with exponential backoff and Discord alerting.*
 - **Missing Test Suites**: `feature-engineering` and `model-training` have pytest configured but zero test definitions. *Mitigation: Write synthetic fixture tests for feature transforms and model evaluation.*
 - **S3 Connectivity Dependency**: Offline development requires mock S3 or local storage fallback. *Mitigation: Local storage fallbacks exist in ingestion components.*
 

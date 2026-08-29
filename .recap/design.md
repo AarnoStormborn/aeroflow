@@ -6,7 +6,7 @@
 
 - **What it is**: A modular Python-based data engineering and machine learning pipeline for real-time flight traffic monitoring and hourly traffic volume forecasting.
 - **Problem it solves**: Captures streaming flight state vectors over specified regional airspaces (e.g., Mumbai bounding box), generates lag and rolling time-series features, outputs automated daily PDF analytics reports, and trains rolling-window forecasting models with MLflow tracking.
-- **Primary users / consumers**: Air traffic analysts, ML engineers, and automated downstream alerting systems (Slack webhooks).
+- **Primary users / consumers**: Air traffic analysts, ML engineers, and automated downstream alerting systems (Discord webhooks).
 - **Tech summary**: Python 3.10+, Polars, PyArrow, Boto3 (AWS S3), scikit-learn, XGBoost, ReportLab, Matplotlib/Seaborn, MLflow, Docker Compose, uv package manager.
 
 ## Goals
@@ -14,7 +14,7 @@
 - Ingest state vectors reliably from OpenSky Network API with configurable polling schedules and failover logging.
 - Store raw data in partitioned S3 Parquet format for efficient analytical querying.
 - Provide idempotent daily batch feature transformation with rolling temporal aggregations.
-- Deliver automated daily PDF intelligence reports and Slack notification cards.
+- Deliver automated daily PDF intelligence reports and Discord notification cards.
 - Automate periodic rolling-window model retraining with full metric and artifact logging in MLflow.
 
 ## Non-goals
@@ -32,14 +32,14 @@ The repository is structured as a 3-tier microservice pipeline: `ingestion` (fet
 - **Responsibility**: Polls OpenSky Network API, transforms raw state arrays into typed Polars DataFrames, logs runs locally in SQLite repository, and uploads partitioned parquet files to S3.
 - **Location**: `ingestion/src/ingestion/`
 - **Inputs / outputs**: Inputs OpenSky `/states/all` HTTP API; outputs `s3://flights-forecasting/raw/year=YYYY/month=MM/day=DD/hour=HH/states_*.parquet`.
-- **Depends on**: OpenSky Network API, AWS S3, Slack incoming webhooks.
+- **Depends on**: OpenSky Network API, AWS S3, Discord incoming webhooks.
 - **Used by**: Feature engineering service.
 
 ### 2. Feature Engineering Service (`feature-engineering/`)
-- **Responsibility**: Ingests raw parquet files across multi-day boundaries, computes temporal and lag features (`lag_1h`, `lag_24h`, `rolling_mean_6h`), generates daily visualization reports in PDF/JSON format, and posts alerts to Slack.
+- **Responsibility**: Ingests raw parquet files across multi-day boundaries, computes temporal and lag features (`lag_1h`, `lag_24h`, `rolling_mean_6h`), generates daily visualization reports in PDF/JSON format, and posts alerts to Discord.
 - **Location**: `feature-engineering/src/`
 - **Inputs / outputs**: Reads raw S3 parquet; writes hourly aggregated features to `s3://flights-forecasting/features/hourly/` and daily reports to `s3://flights-forecasting/reports/daily/`.
-- **Depends on**: `ingestion` data outputs, AWS S3, Slack webhooks.
+- **Depends on**: `ingestion` data outputs, AWS S3, Discord webhooks.
 - **Used by**: Model training service and operations reporting.
 
 ### 3. Model Training Service (`model-training/`)
@@ -72,7 +72,7 @@ The repository is structured as a 3-tier microservice pipeline: `ingestion` (fet
 
 - **Language / toolchain**: Python 3.10+ managed via `uv`.
 - **Configuration**: Pydantic `BaseSettings` reading from `.env` and `settings.yaml`.
-- **Logging**: Loguru with structured timestamps and Slack notification handlers.
+- **Logging**: Loguru with structured timestamps and Discord notification handlers.
 
 ## Out of scope / future work
 

@@ -2,12 +2,12 @@
 Report submodule for generating, uploading, and notifying about reports.
 """
 
+from src.features.report.discord_notifier import DiscordNotifier, create_discord_notifier
 from src.features.report.report_generator import (
     PDFReportGenerator,
     create_report_generator,
 )
 from src.features.report.report_uploader import ReportUploader, create_uploader
-from src.features.report.slack_notifier import SlackNotifier, create_slack_notifier
 from src.features.report.visualization import (
     create_analysis_report,
     plot_altitude_distribution,
@@ -29,7 +29,7 @@ __all__ = [
     # Upload
     "ReportUploader",
     "create_uploader",
-    # Slack
-    "SlackNotifier",
-    "create_slack_notifier",
+    # Discord
+    "DiscordNotifier",
+    "create_discord_notifier",
 ]

@@ -6,7 +6,7 @@ Generates a complete daily report:
 2. Generates visualization plots
 3. Creates PDF report
 4. Uploads cleaned data + PDF to S3
-5. Sends Slack notification with download links
+5. Sends Discord notification with download links
 
 Usage:
     uv run python -m src.features.daily_report --date 2025-12-21
@@ -25,8 +25,8 @@ from src.features.data import (
     get_data_summary,
 )
 from src.features.report import (
+    create_discord_notifier,
     create_report_generator,
-    create_slack_notifier,
     create_uploader,
     plot_altitude_distribution,
     plot_geographic_distribution,
@@ -46,7 +46,7 @@ def generate_daily_report(target_date: date) -> None:
     logger.info(f"GENERATING DAILY REPORT FOR {target_date}")
     logger.info("=" * 60)
 
-    slack = create_slack_notifier()
+    discord = create_discord_notifier()
 
     try:
         # 1. Load data from S3
@@ -118,9 +118,9 @@ def generate_daily_report(target_date: date) -> None:
         data_presigned = uploader.generate_presigned_url(data_s3_url)
         pdf_presigned = uploader.generate_presigned_url(pdf_s3_url)
 
-        # 6. Send Slack notification
-        logger.info("Sending Slack notification...")
-        slack.notify_report_ready(
+        # 6. Send Discord notification
+        logger.info("Sending Discord notification...")
+        discord.notify_report_ready(
             report_date=target_date,
             record_count=summary["total_records"],
             aircraft_count=summary["unique_aircraft"],
@@ -136,7 +136,7 @@ def generate_daily_report(target_date: date) -> None:
 
     except Exception as e:
         logger.error(f"Failed to generate daily report: {e}")
-        slack.notify_report_failed(target_date, str(e))
+        discord.notify_report_failed(target_date, str(e))
         raise
 
 

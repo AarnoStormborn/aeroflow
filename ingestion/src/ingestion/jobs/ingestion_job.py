@@ -204,18 +204,6 @@ class IngestionJob:
 
             logger.info(f"Ingestion complete: {record_count} records stored at {s3_path}")
 
-            # Send success notification (metrics only, no alert)
-            try:
-                duration = (datetime.now(timezone.utc) - now).total_seconds()
-                get_notifier().on_success(
-                    record_id=updated_record.id,
-                    record_count=record_count,
-                    s3_path=s3_path,
-                    duration_seconds=duration,
-                )
-            except Exception as notify_error:
-                logger.warning(f"Failed to send success notification: {notify_error}")
-
             return updated_record
 
         except Exception as e:

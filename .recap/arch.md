@@ -21,14 +21,14 @@ Aeroflow is organized as an decoupled, event/time-driven monorepo containing thr
 ### 1. Ingestion Microservice (`ingestion/`)
 - **Role**: Fetch live flight vectors, parse into tabular form, and store in S3.
 - **Location**: `ingestion/`
-- **Dependencies**: OpenSky Network API, AWS S3 (`boto3`), `polars`, `pydantic-settings`, `apscheduler`, `slack_sdk`.
-- **Key details**: Includes an `OpenSkyClient` supporting OAuth2/basic authentication, bounding-box geospatial filters, an `IngestionRepository` SQLite tracker, and `SlackNotifier` for alert routing.
+- **Dependencies**: OpenSky Network API, AWS S3 (`boto3`), `polars`, `pydantic-settings`, `apscheduler`, `httpx`.
+- **Key details**: Includes an `OpenSkyClient` supporting OAuth2/basic authentication, bounding-box geospatial filters, an `IngestionRepository` SQLite tracker, and `DiscordNotifier` for alert routing.
 
 ### 2. Feature Engineering Microservice (`feature-engineering/`)
 - **Role**: Daily batch ETL aggregating raw flight data into hourly metrics, lag features, and generating PDF intelligence reports.
 - **Location**: `feature-engineering/`
 - **Dependencies**: AWS S3 (`boto3`), `polars`, `reportlab`, `matplotlib`, `seaborn`, `xgboost`, `scikit-learn`.
-- **Key details**: Extracts temporal features (`hour_of_day`, `day_of_week`, `is_weekend`) and lag aggregates (`lag_1h`, `lag_24h`, `rolling_mean_6h`). Compiles PDF visual reports with traffic plots and uploads summaries to S3 and Slack.
+- **Key details**: Extracts temporal features (`hour_of_day`, `day_of_week`, `is_weekend`) and lag aggregates (`lag_1h`, `lag_24h`, `rolling_mean_6h`). Compiles PDF visual reports with traffic plots and uploads summaries to S3 and Discord.
 
 ### 3. Model Training Microservice (`model-training/`)
 - **Role**: Model fitting and evaluation on 14-day rolling feature windows with experiment tracking.
@@ -46,7 +46,7 @@ Aeroflow is organized as an decoupled, event/time-driven monorepo containing thr
 
 1. **Ingestion (Every 10 min)**: OpenSky API $\to$ `OpenSkyClient` $\to$ Parse to Polars $\to$ Save to `s3://flights-forecasting/raw/year=YYYY/month=MM/day=DD/hour=HH/states_*.parquet`.
 2. **Feature Generation (Daily 2 AM)**: Read 2 days of raw parquet $\to$ Filter bounding box $\to$ Aggregate hourly counts $\to$ Compute lag and rolling metrics $\to$ Save to `s3://flights-forecasting/features/hourly/`.
-3. **Reporting (Daily 2 AM)**: Compute day-over-day statistics $\to$ Render Matplotlib charts $\to$ Build PDF via ReportLab $\to$ Upload to `s3://flights-forecasting/reports/daily/` $\to$ Post summary to Slack.
+3. **Reporting (Daily 2 AM)**: Compute day-over-day statistics $\to$ Render Matplotlib charts $\to$ Build PDF via ReportLab $\to$ Upload to `s3://flights-forecasting/reports/daily/` $\to$ Post summary to Discord.
 4. **Model Retraining (Every 3 Days 3 AM)**: Load 14 days of hourly features $\to$ Split train/test (80/20) $\to$ Fit LinearRegression $\to$ Evaluate MAE/MAPE/$R^2$ $\to$ Log run & artifacts to MLflow server.
 
 ## Deployment / runtime topology
@@ -61,5 +61,5 @@ Aeroflow is organized as an decoupled, event/time-driven monorepo containing thr
 
 - **Config / env**: Centralized via Pydantic settings loading from `.env` and `settings.yaml` files.
 - **Auth / security**: OpenSky credentials and AWS S3 access keys managed via environment variables.
-- **Logging / observability**: Loguru structured logging with rotating file handlers and automated Slack error webhook dispatching.
+- **Logging / observability**: Loguru structured logging with rotating file handlers and automated Discord error webhook dispatching.
 - **Error handling**: Defensive S3 upload retries, status database state transitions (`PENDING`, `SUCCESS`, `FAILED`), and error message recording.
