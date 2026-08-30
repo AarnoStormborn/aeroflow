@@ -69,3 +69,69 @@ def test_opensky_client_bounding_box_param():
         assert params.get("lomin") == 71.5
         assert params.get("lamax") == 20.0
         assert params.get("lomax") == 74.0
+
+
+def test_opensky_client_refreshes_token_on_401():
+    """Test client re-fetches OAuth token on 401 and retries once."""
+    client = OpenSkyClient(
+        base_url="https://opensky-network.org/api",
+        client_id="test-client",
+        client_secret="test-secret",
+    )
+
+    # First call returns 401 (expired token), retry returns 200
+    responses = [
+        {"status_code": 401, "json.return_value": {"detail": "Unauthorized"}},
+        {"status_code": 200, "json.return_value": {"time": 123, "states": []}},
+    ]
+
+    with patch("httpx.Client.get") as mock_get:
+        def side_effect(*args, **kwargs):
+            resp = responses.pop(0)
+            mock = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+            mock.status_code = resp["status_code"]
+            mock.json.return_value = resp["json.return_value"]
+            mock.text = ""
+            return mock
+
+        mock_get.side_effect = side_effect
+
+        # Token re-fetch also needs to succeed
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {"access_token": "new-token"}
+
+            res = client.get_states(bounding_box=(18.0, 71.5, 20.0, 74.0))
+
+    assert res["states"] == []
+    # Token was refreshed
+    assert client._token == "new-token"
+    # 2 GETs: original 401 + retry
+    assert mock_get.call_count == 2
+
+
+def test_opensky_client_raises_on_persistent_401():
+    """Test client raises OpenSkyAPIError if re-fetch fails or still 401."""
+    from src.ingestion.components.client import OpenSkyAPIError
+
+    client = OpenSkyClient(
+        base_url="https://opensky-network.org/api",
+        client_id="test-client",
+        client_secret="test-secret",
+    )
+
+    # Both attempts return 401
+    with patch("httpx.Client.get") as mock_get:
+        mock_get.return_value.status_code = 401
+        mock_get.return_value.json.return_value = {"detail": "Unauthorized"}
+        mock_get.return_value.text = "Unauthorized"
+
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            mock_post.return_value.json.return_value = {"access_token": "new-token"}
+
+            try:
+                client.get_states(bounding_box=(18.0, 71.5, 20.0, 74.0))
+                raise AssertionError("Should have raised OpenSkyAPIError")
+            except OpenSkyAPIError:
+                pass

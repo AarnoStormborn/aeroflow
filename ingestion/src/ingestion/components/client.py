@@ -152,6 +152,26 @@ class OpenSkyClient:
                     retry_after=int(retry_after) if retry_after else None,
                 )
 
+            # Handle expired/revoked OAuth token: re-fetch and retry once
+            if response.status_code == 401 and self.client_id and self.client_secret:
+                logger.warning("OAuth token expired (401), re-fetching...")
+                self._fetch_oauth_token()
+                if self._token:
+                    headers["Authorization"] = f"Bearer {self._token}"
+                    response = client.get(
+                        url,
+                        params=params,
+                        headers=headers,
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        logger.debug(
+                            f"Received response with {len(data) if isinstance(data, list) else 'object'} items"
+                        )
+                        return data
+                # If re-fetch failed or still not 200, fall through to error handling
+                logger.error("Token re-fetch failed, request still unauthorized")
+
             # Handle other errors
             if response.status_code != 200:
                 raise OpenSkyAPIError(
