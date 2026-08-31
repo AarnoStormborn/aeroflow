@@ -1,7 +1,7 @@
 """Unit tests for OpenSky client, local storage, and failure capture."""
 
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.ingestion.components.client import OpenSkyClient
 from src.ingestion.components.local_storage import LocalStorage
@@ -147,7 +147,7 @@ def test_opensky_client_timeout_includes_timeout_value():
         timeout=60,
     )
 
-    with patch("httpx.Client.get") as mock_get:
+    with patch("httpx.Client.get") as mock_get, patch("time.sleep") as mock_sleep:
         mock_get.side_effect = httpx_timeout()
 
         try:
@@ -156,6 +156,81 @@ def test_opensky_client_timeout_includes_timeout_value():
         except APITimeoutError as e:
             assert e.timeout == 60
             assert "after 60s" in str(e)
+        # 1 initial + 3 retries = 4 attempts
+        assert mock_get.call_count == 4
+        # Delays: 2, 4, 8 (exponential backoff)
+        assert mock_sleep.call_args_list == [
+            ((2.0,),), ((4.0,),), ((8.0,),),
+        ]
+
+
+def test_opensky_client_retries_then_succeeds():
+    """Test client retries on transient timeout then succeeds on a later attempt."""
+    from src.ingestion.components.client import OpenSkyClient
+
+    client = OpenSkyClient(
+        base_url="https://opensky-network.org/api",
+        timeout=60,
+    )
+
+    responses = [
+        httpx_timeout(),       # attempt 1: timeout
+        httpx_timeout(),       # attempt 2: timeout
+        {"status_code": 200, "json.return_value": {"time": 123, "states": ["x"]}},
+    ]
+
+    with patch("httpx.Client.get") as mock_get, patch("time.sleep") as mock_sleep:
+        def side_effect(*args, **kwargs):
+            item = responses.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            mock = MagicMock()
+            mock.status_code = item["status_code"]
+            mock.json.return_value = item["json.return_value"]
+            mock.text = ""
+            return mock
+
+        mock_get.side_effect = side_effect
+
+        res = client.get_states(bounding_box=(18.0, 71.5, 20.0, 74.0))
+
+    assert res["states"] == ["x"]
+    assert mock_get.call_count == 3
+    assert mock_sleep.call_count == 2  # two retries before success
+
+
+def test_opensky_client_retries_429_then_succeeds():
+    """Test client retries on 429 rate limit, respecting Retry-After."""
+    from src.ingestion.components.client import OpenSkyClient
+
+    client = OpenSkyClient(
+        base_url="https://opensky-network.org/api",
+        timeout=60,
+    )
+
+    responses = [
+        {"status_code": 429, "headers": {"Retry-After": "5"}},
+        {"status_code": 200, "json.return_value": {"time": 123, "states": ["y"]}},
+    ]
+
+    with patch("httpx.Client.get") as mock_get, patch("time.sleep") as mock_sleep:
+        def side_effect(*args, **kwargs):
+            item = responses.pop(0)
+            mock = MagicMock()
+            mock.status_code = item["status_code"]
+            mock.json.return_value = item.get("json.return_value", {})
+            mock.headers = item.get("headers", {})
+            mock.text = "rate limited"
+            return mock
+
+        mock_get.side_effect = side_effect
+
+        res = client.get_states(bounding_box=(18.0, 71.5, 20.0, 74.0))
+
+    assert res["states"] == ["y"]
+    assert mock_get.call_count == 2
+    # Retry-After respected (5s), not the backoff
+    mock_sleep.assert_called_once_with(5.0)
 
 
 def httpx_timeout():

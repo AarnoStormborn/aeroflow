@@ -5,6 +5,7 @@ Provides methods to fetch flight data from the OpenSky Network API.
 Documentation: https://openskynetwork.github.io/opensky-api/
 """
 
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -111,7 +112,16 @@ class OpenSkyClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """
-        Make a request to the OpenSky API.
+        Make a request to the OpenSky API, with retries on transient failures.
+
+        Retries up to ``max_retries`` times (default 3) with exponential
+        backoff (delay doubles each retry). Retries on:
+          - connection errors
+          - timeouts
+          - HTTP 429 (rate limit)
+          - HTTP 5xx (server errors)
+
+        Does NOT retry on 4xx client errors (except 429).
 
         Args:
             endpoint: API endpoint path
@@ -128,71 +138,108 @@ class OpenSkyClient:
         """
         url = f"{self.base_url}{endpoint}"
 
-        try:
-            logger.debug(f"Making request to {url} with params: {params}")
+        max_retries = 3
+        base_delay = 2.0  # seconds; doubles each retry: 2, 4, 8
 
-            # Build headers with Bearer token if available
-            headers = {}
+        for attempt in range(max_retries + 1):
+            try:
+                return self._single_request(url, params)
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if attempt >= max_retries:
+                    if isinstance(e, httpx.ConnectError):
+                        raise APIConnectionError(f"Failed to connect to OpenSky API: {e}")
+                    raise APITimeoutError(
+                        f"Request to OpenSky API timed out: {e}",
+                        timeout=self.timeout,
+                    )
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"OpenSky request attempt {attempt + 1} failed ({type(e).__name__}); "
+                    f"retrying in {delay:.0f}s ({max_retries - attempt} retries left)"
+                )
+                time.sleep(delay)
+            except httpx.HTTPError as e:
+                if attempt >= max_retries:
+                    raise OpenSkyAPIError(f"HTTP error occurred: {e}")
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"OpenSky request attempt {attempt + 1} failed ({type(e).__name__}); "
+                    f"retrying in {delay:.0f}s ({max_retries - attempt} retries left)"
+                )
+                time.sleep(delay)
+            except RateLimitError as e:
+                if attempt >= max_retries:
+                    raise
+                # Respect the Retry-After header if provided, else backoff
+                delay = e.retry_after or base_delay * (2 ** attempt)
+                logger.warning(
+                    f"OpenSky rate limited (attempt {attempt + 1}); "
+                    f"retrying in {delay:.0f}s"
+                )
+                time.sleep(delay)
+
+        raise OpenSkyAPIError("OpenSky request failed after retries")  # unreachable
+
+    def _single_request(
+        self,
+        url: str,
+        params: dict[str, Any] | None,
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Perform one HTTP GET to OpenSky, raising on non-200 responses."""
+        logger.debug(f"Making request to {url} with params: {params}")
+
+        # Build headers with Bearer token if available
+        headers = {}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.get(
+                url,
+                params=params,
+                headers=headers if headers else None,
+                auth=self._auth if not self._token else None,
+            )
+
+        # Handle rate limiting
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            raise RateLimitError(
+                message="OpenSky API rate limit exceeded",
+                retry_after=int(retry_after) if retry_after else None,
+            )
+
+        # Handle expired/revoked OAuth token: re-fetch and retry once
+        if response.status_code == 401 and self.client_id and self.client_secret:
+            logger.warning("OAuth token expired (401), re-fetching...")
+            self._fetch_oauth_token()
             if self._token:
                 headers["Authorization"] = f"Bearer {self._token}"
-
-            with httpx.Client(timeout=self.timeout) as client:
                 response = client.get(
                     url,
                     params=params,
-                    headers=headers if headers else None,
-                    auth=self._auth if not self._token else None,
+                    headers=headers,
                 )
-
-            # Handle rate limiting
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                raise RateLimitError(
-                    message="OpenSky API rate limit exceeded",
-                    retry_after=int(retry_after) if retry_after else None,
-                )
-
-            # Handle expired/revoked OAuth token: re-fetch and retry once
-            if response.status_code == 401 and self.client_id and self.client_secret:
-                logger.warning("OAuth token expired (401), re-fetching...")
-                self._fetch_oauth_token()
-                if self._token:
-                    headers["Authorization"] = f"Bearer {self._token}"
-                    response = client.get(
-                        url,
-                        params=params,
-                        headers=headers,
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.debug(
+                        f"Received response with {len(data) if isinstance(data, list) else 'object'} items"
                     )
-                    if response.status_code == 200:
-                        data = response.json()
-                        logger.debug(
-                            f"Received response with {len(data) if isinstance(data, list) else 'object'} items"
-                        )
-                        return data
-                # If re-fetch failed or still not 200, fall through to error handling
-                logger.error("Token re-fetch failed, request still unauthorized")
+                    return data
+            # If re-fetch failed or still not 200, fall through to error handling
+            logger.error("Token re-fetch failed, request still unauthorized")
 
-            # Handle other errors
-            if response.status_code != 200:
-                raise OpenSkyAPIError(
-                    message=f"API request failed: {response.status_code}",
-                    status_code=response.status_code,
-                    response_body=response.text,
-                )
-
-            data = response.json()
-            logger.debug(f"Received response with {len(data) if isinstance(data, list) else 'object'} items")
-            return data
-
-        except httpx.ConnectError as e:
-            raise APIConnectionError(f"Failed to connect to OpenSky API: {e}")
-        except httpx.TimeoutException as e:
-            raise APITimeoutError(
-                f"Request to OpenSky API timed out: {e}",
-                timeout=self.timeout,
+        # Handle other errors
+        if response.status_code != 200:
+            raise OpenSkyAPIError(
+                message=f"API request failed: {response.status_code}",
+                status_code=response.status_code,
+                response_body=response.text,
             )
-        except httpx.HTTPError as e:
-            raise OpenSkyAPIError(f"HTTP error occurred: {e}")
+
+        data = response.json()
+        logger.debug(f"Received response with {len(data) if isinstance(data, list) else 'object'} items")
+        return data
 
     def get_states(
         self,

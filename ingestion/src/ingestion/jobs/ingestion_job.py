@@ -213,7 +213,19 @@ class IngestionJob:
             logger.error(f"Ingestion FAILED [{category}]: {message}")
             logger.debug(f"Full traceback:\n{traceback.format_exc()}")
 
-            # Send failure notification (metrics + SNS alert)
+            # Update record with failure FIRST so the notifier's dedup check
+            # sees this failure and suppresses duplicate alerts within cooldown.
+            try:
+                updated = self.repository.update_record(
+                    record_id=record.id,
+                    status=IngestionStatus.FAILED,
+                    error_message=f"[{category}] {message}",
+                )
+            except Exception as update_error:
+                logger.exception(f"CRITICAL: Failed to update record with error: {update_error}")
+                updated = None
+
+            # Send failure notification (dedup-aware)
             try:
                 duration = (datetime.now(timezone.utc) - now).total_seconds()
                 get_notifier().on_failure(
@@ -225,26 +237,19 @@ class IngestionJob:
             except Exception as notify_error:
                 logger.warning(f"Failed to send failure notification: {notify_error}")
 
-            # Update record with failure
-            try:
-                return self.repository.update_record(
-                    record_id=record.id,
-                    status=IngestionStatus.FAILED,
-                    error_message=f"[{category}] {message}",
-                )
-            except Exception as update_error:
-                # Even the update failed - log both errors
-                logger.exception(f"CRITICAL: Failed to update record with error: {update_error}")
-                return IngestionRecord(
-                    id=record.id,
-                    created_at=record.created_at,
-                    time_window_start=record.time_window_start,
-                    time_window_end=record.time_window_end,
-                    s3_path=None,
-                    record_count=0,
-                    status=IngestionStatus.FAILED,
-                    error_message=f"[{category}] {message} (also failed to update record: {update_error})",
-                )
+            if updated is not None:
+                return updated
+
+            return IngestionRecord(
+                id=record.id,
+                created_at=record.created_at,
+                time_window_start=record.time_window_start,
+                time_window_end=record.time_window_end,
+                s3_path=None,
+                record_count=0,
+                status=IngestionStatus.FAILED,
+                error_message=f"[{category}] {message} (also failed to update record)",
+            )
 
 
 def run_ingestion() -> IngestionRecord:

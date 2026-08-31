@@ -4,6 +4,7 @@ Main notifier that sends Discord alerts.
 Provides a unified interface for sending notifications.
 """
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.notifications.discord import DiscordNotifier, create_discord_notifier
@@ -17,20 +18,25 @@ class IngestionNotifier:
     """
     Unified notifier for ingestion events.
 
-    Sends Discord notifications for failures.
+    Sends Discord notifications for failures, deduplicated so repeated
+    failures of the same category don't spam (cooldown window).
     """
 
     def __init__(
         self,
         discord: DiscordNotifier | None = None,
+        alert_cooldown_seconds: int = 3600,
     ):
         """
         Initialize the notifier.
 
         Args:
             discord: Discord notifier (created if not provided)
+            alert_cooldown_seconds: Min seconds between alerts of the same
+                error category (default 1 hour). Set 0 to disable dedup.
         """
         self.discord = discord or create_discord_notifier()
+        self.alert_cooldown_seconds = alert_cooldown_seconds
 
         logger.info("IngestionNotifier initialized")
 
@@ -52,12 +58,45 @@ class IngestionNotifier:
         """
         logger.error(f"Recording failure: [{error_category}] {error_message}")
 
+        # Deduplicate: skip alert if same category was alerted recently.
+        # Uses the DB so it works across fresh containers (serverless).
+        if not self._should_alert(error_category):
+            return
+
         # Send Discord notification
         self.discord.notify_failure(
             error_category=error_category,
             error_message=error_message,
             record_id=record_id,
         )
+
+    def _should_alert(self, category: str) -> bool:
+        """Return True if an alert for this category should be sent now.
+
+        Consults the persistent ingestion DB: if the most recent failed
+        record with this error category is newer than the cooldown window,
+        suppress (prevents spam across serverless invocations).
+        """
+        if self.alert_cooldown_seconds <= 0:
+            return True
+
+        try:
+            from src.ingestion.db import create_repository
+
+            repo = create_repository()
+            last = repo.get_last_failure_by_category(category)
+            if last is not None:
+                age = (datetime.now(timezone.utc) - last.created_at).total_seconds()
+                if age < self.alert_cooldown_seconds:
+                    logger.info(
+                        f"Suppressing duplicate {category} alert "
+                        f"(last failure {age:.0f}s ago, cooldown {self.alert_cooldown_seconds}s)"
+                    )
+                    return False
+        except Exception as e:
+            logger.warning(f"Dedup check failed ({e}); sending alert anyway")
+
+        return True
 
     def notify_from_record(
         self,

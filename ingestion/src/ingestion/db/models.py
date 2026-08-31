@@ -99,6 +99,13 @@ WHERE time_window_start >= ? AND time_window_end <= ?
 ORDER BY created_at DESC
 """
 
+SELECT_LAST_FAILURE_BY_CATEGORY_SQL = """
+SELECT * FROM ingestion_records
+WHERE status = 'failed' AND error_message LIKE ?
+ORDER BY created_at DESC
+LIMIT 1
+"""
+
 
 def _row_to_record(row: tuple) -> IngestionRecord:
     """Convert database row to IngestionRecord."""
@@ -273,6 +280,24 @@ class IngestionRepository:
             rows = cursor.fetchall()
 
         return [_row_to_record(row) for row in rows]
+
+    def get_last_failure_by_category(self, category: str) -> IngestionRecord | None:
+        """
+        Get the most recent failed record matching an error category.
+
+        Args:
+            category: Error category (e.g. "API_TIMEOUT")
+
+        Returns:
+            Most recent matching IngestionRecord, or None if none.
+        """
+        pattern = f"[{category}]%"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(SELECT_LAST_FAILURE_BY_CATEGORY_SQL, (pattern,))
+            row = cursor.fetchone()
+
+        return _row_to_record(row) if row else None
 
     def get_by_time_range(
         self,

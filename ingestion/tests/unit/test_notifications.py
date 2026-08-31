@@ -1,7 +1,7 @@
 """Unit tests for Discord notifier and unified notifier wiring."""
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -166,7 +166,8 @@ def test_create_notifier_returns_ingestion_notifier():
 def test_on_failure_delegates_to_discord():
     """Test on_failure forwards to the Discord notifier."""
     mock_discord = MagicMock()
-    notifier = IngestionNotifier(discord=mock_discord)
+    # Disable dedup so it always alerts
+    notifier = IngestionNotifier(discord=mock_discord, alert_cooldown_seconds=0)
 
     notifier.on_failure(
         record_id=7,
@@ -181,12 +182,59 @@ def test_on_failure_delegates_to_discord():
     )
 
 
+def test_on_failure_dedups_same_category():
+    """Test repeated failures of the same category are suppressed by cooldown.
+
+    Uses a real temp DB so the persistent dedup path is exercised.
+    """
+    import tempfile
+
+    from src.ingestion.db import (
+        IngestionRepository,
+        IngestionStatus,
+    )
+
+    mock_discord = MagicMock()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = IngestionRepository(db_path=f"{tmpdir}/test.db")
+
+        # Insert two failed records with the same category, close in time
+        now = datetime.now(timezone.utc)
+        repo.create_record(
+            time_window_start=now - timedelta(minutes=2),
+            time_window_end=now - timedelta(minutes=1),
+        )
+        repo.update_record(
+            record_id=1,
+            status=IngestionStatus.FAILED,
+            error_message="[API_TIMEOUT] first",
+        )
+
+        notifier = IngestionNotifier(discord=mock_discord, alert_cooldown_seconds=3600)
+
+        # Simulate on_failure for a NEW record that just failed with same category.
+        # Since repo has a recent API_TIMEOUT failure, this should be suppressed.
+        with patch("src.ingestion.db.create_repository", return_value=repo):
+            notifier.on_failure(
+                record_id=2, error_category="API_TIMEOUT", error_message="second"
+            )
+        mock_discord.notify_failure.assert_not_called()
+
+        # Different category -> alerts
+        with patch("src.ingestion.db.create_repository", return_value=repo):
+            notifier.on_failure(
+                record_id=3, error_category="RATE_LIMIT", error_message="rate"
+            )
+        mock_discord.notify_failure.assert_called_once()
+
+
 def test_notify_from_record_failure_extracts_category():
     """Test notify_from_record parses [CATEGORY] prefix from error message."""
     from src.ingestion.db import IngestionStatus
 
     mock_discord = MagicMock()
-    notifier = IngestionNotifier(discord=mock_discord)
+    # Disable cooldown so dedup doesn't suppress (real DB may have recent API_TIMEOUT)
+    notifier = IngestionNotifier(discord=mock_discord, alert_cooldown_seconds=0)
 
     record = MagicMock()
     record.status = IngestionStatus.FAILED
