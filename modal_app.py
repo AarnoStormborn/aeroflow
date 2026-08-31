@@ -183,13 +183,16 @@ def mlflow_ui():
         f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow"
     )
 
-    # Run mlflow server on 0.0.0.0:5000 with the Volume-backed SQLite store
+    # Run mlflow server on 0.0.0.0:5000 with the Volume-backed SQLite store.
+    # MLflow 3.5+ validates Host headers; Modal proxies requests with its own
+    # hostname, so allow it (restrict to the Modal subdomain for production).
     cmd = [
         "mlflow", "server",
         "--backend-store-uri", f"sqlite:///{db_path}",
         "--default-artifact-root", artifact_root,
         "--host", "0.0.0.0",
         "--port", "5000",
+        "--allowed-hosts", "*",
     ]
     proc = subprocess.Popen(cmd)
     return proc
