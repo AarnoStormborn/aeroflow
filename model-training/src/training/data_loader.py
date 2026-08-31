@@ -10,7 +10,6 @@ from datetime import date, timedelta
 import boto3
 import polars as pl
 from loguru import logger
-
 from src.training.config import settings
 
 

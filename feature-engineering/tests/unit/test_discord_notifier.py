@@ -79,17 +79,21 @@ def test_notify_report_failed_builds_embed(mock_client_cls):
 
 def test_notifier_disabled_without_webhook():
     """Test notifier is disabled when no webhook URL configured."""
-    notifier = DiscordNotifier(webhook_url=None)
-    assert notifier.enabled is False
+    with patch("src.features.report.discord_notifier.settings") as mock_settings:
+        mock_settings.discord_webhook_url = None
+        notifier = DiscordNotifier(webhook_url=None)
+        assert notifier.enabled is False
 
 
 @patch("src.features.report.discord_notifier.httpx.Client")
 def test_send_disabled_skips_request(mock_client_cls):
     """Test _send returns False and does not POST when disabled."""
-    notifier = DiscordNotifier(webhook_url=None)
-    result = notifier._send({"content": "test"})
+    with patch("src.features.report.discord_notifier.settings") as mock_settings:
+        mock_settings.discord_webhook_url = None
+        notifier = DiscordNotifier(webhook_url=None)
+        result = notifier._send({"content": "test"})
 
-    assert result is False
+        assert result is False
     mock_client_cls.assert_not_called()
 
 

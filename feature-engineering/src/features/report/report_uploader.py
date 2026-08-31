@@ -13,7 +13,6 @@ from pathlib import Path
 import boto3
 import polars as pl
 from loguru import logger
-
 from src.features.config import settings
 
 

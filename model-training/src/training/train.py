@@ -23,7 +23,6 @@ from sklearn.metrics import (
     mean_absolute_percentage_error,
     r2_score,
 )
-
 from src.training.config import settings
 from src.training.data_loader import create_loader
 from src.training.utils import (

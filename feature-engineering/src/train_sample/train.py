@@ -16,7 +16,6 @@ from loguru import logger
 from sklearn.linear_model import LinearRegression, Ridge, RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
-
 from src.features.data import create_loader
 
 # --- Feature Engineering ---

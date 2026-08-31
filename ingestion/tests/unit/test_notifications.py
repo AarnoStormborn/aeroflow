@@ -1,8 +1,11 @@
 """Unit tests for Discord notifier and unified notifier wiring."""
 
+import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+import src.notifications.config as notif_config
 from src.notifications.config import (
     DiscordSettings,
     NotificationSettings,
@@ -78,14 +81,35 @@ def test_notify_failure_record_id_none(mock_client_cls):
 # --- DiscordNotifier enabled/disabled behavior ---
 
 
-def test_notifier_disabled_without_webhook():
+@pytest.fixture
+def clean_notification_env():
+    """Clear Discord env vars and reset the settings singleton for env-independent tests."""
+    saved = {
+        k: os.environ.get(k) for k in
+        ("DISCORD_WEBHOOK_URL", "DISCORD_ENABLED", "NOTIFY_ENVIRONMENT", "NOTIFY_SERVICE_NAME")
+        if k in os.environ
+    }
+    for k in saved:
+        os.environ.pop(k, None)
+    # Rebuild the singleton WITHOUT env vars, and point discord.py at the fresh one
+    notif_config._notification_settings = None
+    fresh = notif_config.get_notification_settings()
+    with patch("src.notifications.discord.notification_settings", fresh):
+        yield
+    # Restore
+    for k, v in saved.items():
+        os.environ[k] = v
+    notif_config._notification_settings = None
+
+
+def test_notifier_disabled_without_webhook(clean_notification_env):
     """Test notifier is disabled when no webhook URL is configured."""
     notifier = DiscordNotifier(webhook_url=None)
     assert notifier.enabled is False
 
 
 @patch("src.notifications.discord.httpx.Client")
-def test_send_disabled_skips_request(mock_client_cls):
+def test_send_disabled_skips_request(mock_client_cls, clean_notification_env):
     """Test _send returns False and does not POST when disabled."""
     notifier = DiscordNotifier(webhook_url=None)
     result = notifier._send({"content": "test"})
@@ -113,15 +137,16 @@ def test_webhook_error_returns_false(mock_client_cls):
 # --- Config ---
 
 
+@patch.dict("os.environ", {}, clear=True)
 def test_discord_settings_defaults():
-    """Test DiscordSettings default values."""
+    """Test DiscordSettings default values (independent of real env)."""
     settings = DiscordSettings()
     assert settings.enabled is True
     assert settings.webhook_url is None
 
 
-def test_notification_settings_contains_discord():
-    """Test NotificationSettings nests DiscordSettings."""
+def test_notification_settings_contains_discord(clean_notification_env):
+    """Test NotificationSettings nests DiscordSettings (independent of real env)."""
     settings = NotificationSettings()
     assert isinstance(settings.discord, DiscordSettings)
     assert settings.environment == "development"

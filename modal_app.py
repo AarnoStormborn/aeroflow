@@ -179,7 +179,9 @@ def mlflow_ui():
     _set_env_defaults()
 
     db_path = os.environ.get("MLFLOW_BACKEND_STORE_URI") or os.path.join(VOLUME_MOUNT, "mlflow.db")
-    artifact_root = os.environ.get("MLFLOW_ARTIFACT_ROOT") or f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow"
+    artifact_root = os.environ.get("MLFLOW_ARTIFACT_ROOT") or (
+        f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow"
+    )
 
     # Run mlflow server on 0.0.0.0:5000 with the Volume-backed SQLite store
     cmd = [

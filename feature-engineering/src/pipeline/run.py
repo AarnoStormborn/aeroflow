@@ -16,7 +16,6 @@ from pathlib import Path
 import boto3
 import polars as pl
 from loguru import logger
-
 from src.features.config import settings
 from src.features.data import create_loader
 from src.pipeline.features import prepare_daily_features

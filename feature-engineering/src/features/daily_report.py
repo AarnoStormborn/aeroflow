@@ -17,7 +17,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from loguru import logger
-
 from src.features.data import (
     add_derived_columns,
     clean_flight_data,

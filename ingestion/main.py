@@ -16,7 +16,6 @@ Environment variables:
 import argparse
 
 from dotenv import load_dotenv
-
 from src.ingestion.config import settings
 from src.utils.logger import logger, setup_logger
 

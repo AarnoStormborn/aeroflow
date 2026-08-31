@@ -2,6 +2,11 @@
 
 Single Modal app hosting all pipeline components serverlessly.
 
+> The repo is a **uv workspace**: `pyproject.toml` at root ties together
+> `ingestion/`, `feature-engineering/`, `model-training/`. One lockfile
+> (`uv.lock`) at root. Run `uv sync` at root to install everything, or
+> `uv run --package <service> --directory <service> pytest` per service.
+
 ## Components
 
 | Function | Schedule | Purpose |

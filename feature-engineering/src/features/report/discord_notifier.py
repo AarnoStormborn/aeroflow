@@ -8,7 +8,6 @@ from datetime import date, datetime, timezone
 
 import httpx
 from loguru import logger
-
 from src.features.config import settings
 
 

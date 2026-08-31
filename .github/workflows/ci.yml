@@ -15,10 +15,6 @@ jobs:
       matrix:
         service: [ingestion, feature-engineering, model-training]
 
-    defaults:
-      run:
-        working-directory: ${{ matrix.service }}
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,11 +23,11 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Sync dependencies
+      - name: Sync workspace
         run: uv sync --all-groups
 
-      - name: Lint (ruff)
-        run: uv run ruff check .
+      - name: Lint (${{ matrix.service }})
+        run: uv run --package ${{ matrix.service }} --directory ${{ matrix.service }} ruff check .
 
-      - name: Test
-        run: uv run pytest -q
+      - name: Test (${{ matrix.service }})
+        run: uv run --package ${{ matrix.service }} --directory ${{ matrix.service }} pytest -q

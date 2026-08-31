@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 import polars as pl
 import pytest
-
 from src.features.data.cleaning import (
     add_derived_columns,
     clean_flight_data,

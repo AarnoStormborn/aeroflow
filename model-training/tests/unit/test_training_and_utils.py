@@ -2,7 +2,6 @@
 
 import numpy as np
 from sklearn.linear_model import LinearRegression
-
 from src.training.utils import (
     plot_feature_importance,
     plot_forecast_with_ci,

@@ -25,7 +25,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-
 from src.features.data import get_data_summary
 
 

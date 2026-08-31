@@ -9,7 +9,6 @@ import argparse
 from datetime import date, datetime
 
 from loguru import logger
-
 from src.features.data import (
     add_derived_columns,
     clean_flight_data,

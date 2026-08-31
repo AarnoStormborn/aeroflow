@@ -1,0 +1,43 @@
+[project]
+name = "aeroflow"
+version = "0.1.0"
+description = "Flights Forecasting Services — workspace root"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.uv.workspace]
+members = [
+    "ingestion",
+    "feature-engineering",
+    "model-training",
+]
+
+[dependency-groups]
+# Shared dev tooling for all services (ruff, pytest available at root)
+dev = [
+    "ruff",
+    "pytest",
+    "modal",  # deploy tooling (modal_app.py)
+]
+
+# Shared ruff config (single source of truth)
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "RUF"]
+ignore = [
+    "BLE001",
+    "DTZ001",
+    "DTZ007",
+    "DTZ011",
+    "RUF022",
+    "RUF059",
+    "C408",
+    "RUF012",
+    "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
