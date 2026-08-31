@@ -187,7 +187,10 @@ class OpenSkyClient:
         except httpx.ConnectError as e:
             raise APIConnectionError(f"Failed to connect to OpenSky API: {e}")
         except httpx.TimeoutException as e:
-            raise APITimeoutError(f"Request to OpenSky API timed out: {e}")
+            raise APITimeoutError(
+                f"Request to OpenSky API timed out: {e}",
+                timeout=self.timeout,
+            )
         except httpx.HTTPError as e:
             raise OpenSkyAPIError(f"HTTP error occurred: {e}")
 

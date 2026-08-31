@@ -20,7 +20,7 @@ class OpenSkySettings(BaseSettings):
 
     base_url: str = Field(default="https://opensky-network.org/api")
     auth_url: str = Field(default="https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token")
-    timeout_seconds: int = Field(default=30)
+    timeout_seconds: int = Field(default=60)
     # OAuth2 client credentials (for higher rate limits)
     client_id: str | None = Field(default=None)
     client_secret: str | None = Field(default=None)

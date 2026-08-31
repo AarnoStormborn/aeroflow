@@ -135,3 +135,29 @@ def test_opensky_client_raises_on_persistent_401():
                 raise AssertionError("Should have raised OpenSkyAPIError")
             except OpenSkyAPIError:
                 pass
+
+
+def test_opensky_client_timeout_includes_timeout_value():
+    """Test timeout error message includes the configured timeout (not 'None')."""
+    from src.ingestion.components.client import OpenSkyClient
+    from src.utils.exceptions import APITimeoutError
+
+    client = OpenSkyClient(
+        base_url="https://opensky-network.org/api",
+        timeout=60,
+    )
+
+    with patch("httpx.Client.get") as mock_get:
+        mock_get.side_effect = httpx_timeout()
+
+        try:
+            client.get_states(bounding_box=(18.0, 71.5, 20.0, 74.0))
+            raise AssertionError("Should have raised APITimeoutError")
+        except APITimeoutError as e:
+            assert e.timeout == 60
+            assert "after 60s" in str(e)
+
+
+def httpx_timeout():
+    import httpx
+    return httpx.TimeoutException("Request timed out")
