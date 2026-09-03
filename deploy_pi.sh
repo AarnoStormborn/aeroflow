@@ -41,7 +41,7 @@ if [ ! -f "$HOME/aeroflow/.env" ]; then
     echo "    AWS_S3_BUCKET_NAME=flights-forecasting"
     echo "    DISCORD_WEBHOOK_URL / DISCORD_ENABLED=true"
     echo "    SCHEDULER_INTERVAL_SECONDS=900"
-    echo "    DB_PATH=/home/$USER/aeroflow/ingestion/data/ingestion.db"
+    echo "    DB_PATH=/root/aeroflow/ingestion/data/ingestion.db"
     echo
     read -p "Press Enter once .env is configured..."
 fi
