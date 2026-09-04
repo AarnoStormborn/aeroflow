@@ -94,14 +94,23 @@ training_image = (
         "seaborn>=0.13.0",
         "scikit-learn>=1.4.0",
         "mlflow==3.8.1",
+        "anyio>=4.0.0,<4.14",
     )
     .add_local_dir("./model-training", "/root/training", copy=True, ignore=_ignore)
 )
 
-# MLflow server image
+# MLflow server image — MLflow 3.8.1 breaks with anyio>=4.14 (lazy
+# submodule imports); pin anyio<4.14 for from_thread attribute access.
 mlflow_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("mlflow==3.8.1", "boto3>=1.34.0", "psycopg2-binary>=2.9.0")
+    .pip_install(
+        "mlflow==3.8.1",
+        "boto3>=1.34.0",
+        "psycopg2-binary>=2.9.0",
+        "anyio>=4.0.0,<4.14",
+        "fastapi",
+        "uvicorn",
+    )
 )
 
 secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
