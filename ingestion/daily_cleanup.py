@@ -22,6 +22,14 @@ from pathlib import Path
 
 import boto3
 
+# Load .env (repo root has the env file; systemd also injects via EnvironmentFile)
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_env_path)
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
 # Config (loaded from .env by the systemd EnvironmentFile)
 # ---------------------------------------------------------------------------

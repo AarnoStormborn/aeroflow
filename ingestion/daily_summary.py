@@ -12,13 +12,21 @@ Usage:
 import argparse
 import os
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 
+# Load .env (repo root has the env file; systemd also injects via EnvironmentFile)
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_env_path)
+except ImportError:
+    pass
+
 # ---------------------------------------------------------------------------
-# Config (loaded from .env by the systemd EnvironmentFile)
+# Config
 # ---------------------------------------------------------------------------
 
 DB_PATH = Path(os.environ.get("DB_PATH", "data/ingestion.db"))
@@ -36,8 +44,7 @@ def get_stats(target_day: date) -> dict:
     cur = conn.cursor()
 
     day_start = datetime.combine(target_day, datetime.min.time(), tzinfo=timezone.utc)
-    day_end = datetime.combine(target_day + __import__("datetime").timedelta(days=1),
-                               datetime.min.time(), tzinfo=timezone.utc)
+    day_end = datetime.combine(target_day + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
 
     def _q(sql, params=()):
         return cur.execute(sql, params).fetchone()[0]
