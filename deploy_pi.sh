@@ -71,9 +71,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable aeroflow-ingestion
 sudo systemctl start aeroflow-ingestion
 
+# 6. Install daily summary + cleanup timers
+sudo cp $HOME/aeroflow/deploy/systemd/aeroflow-summary.service /etc/systemd/system/
+sudo cp $HOME/aeroflow/deploy/systemd/aeroflow-summary.timer /etc/systemd/system/
+sudo cp $HOME/aeroflow/deploy/systemd/aeroflow-cleanup.service /etc/systemd/system/
+sudo cp $HOME/aeroflow/deploy/systemd/aeroflow-cleanup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable aeroflow-summary.timer aeroflow-cleanup.timer
+sudo systemctl start aeroflow-summary.timer aeroflow-cleanup.timer
+
 echo "========================================"
 echo "DEPLOY COMPLETE"
 echo "========================================"
 echo "Check: sudo systemctl status aeroflow-ingestion"
 echo "Logs:  sudo journalctl -u aeroflow-ingestion -f"
 echo "Memory: systemctl show aeroflow-ingestion -p MemoryCurrent"
+echo "Timers: systemctl list-timers aeroflow-*"

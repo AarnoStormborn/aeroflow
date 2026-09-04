@@ -1,0 +1,11 @@
+[Unit]
+Description=Aeroflow daily cleanup (backup DB+logs to S3, fresh DB)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/aeroflow/ingestion
+EnvironmentFile=/root/aeroflow/.env
+ExecStart=/root/aeroflow/.venv-pi/bin/python /root/aeroflow/ingestion/daily_cleanup.py
