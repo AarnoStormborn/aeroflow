@@ -1,18 +1,18 @@
 """
-Daily ingestion summary — sends a Discord message summarizing the day's
-ingestion activity and lifetime totals.
+Daily ingestion summary — sends a Discord message summarizing ingestion
+activity since the last cleanup (the DB is reset daily by daily_cleanup).
 
 Runs on the Raspberry Pi daily (via systemd timer / cron). Queries the
 local SQLite DB, then posts a summary embed to Discord.
 
 Usage:
-    python daily_summary.py [--date YYYY-MM-DD]   (default: today)
+    python daily_summary.py
 """
 
 import argparse
 import os
 import sqlite3
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -37,51 +37,42 @@ SERVICE_NAME = os.environ.get("NOTIFY_SERVICE_NAME", "ingestion-service")
 BUCKET = os.environ.get("AWS_S3_BUCKET_NAME", "flights-forecasting")
 
 
-def get_stats(target_day: date) -> dict:
-    """Query ingestion stats for a given day + lifetime totals."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+def get_stats() -> dict:
+    """Query ingestion stats from the current DB contents.
 
-    day_start = datetime.combine(target_day, datetime.min.time(), tzinfo=timezone.utc)
-    day_end = datetime.combine(target_day + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    The DB is reset by daily_cleanup (daily), so its rows represent the
+    data collected since the last cleanup. No calendar-day math needed —
+    this avoids timezone issues between the Pi's local time and UTC.
+    """
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
 
     def _q(sql, params=()):
         return cur.execute(sql, params).fetchone()[0]
 
-    # Day stats
-    day_total_runs = _q(
-        "SELECT COUNT(*) FROM ingestion_records WHERE created_at >= ? AND created_at < ?",
-        (day_start.isoformat(), day_end.isoformat()),
+    total_runs = _q("SELECT COUNT(*) FROM ingestion_records")
+    success = _q("SELECT COUNT(*) FROM ingestion_records WHERE status='success'")
+    failed = _q("SELECT COUNT(*) FROM ingestion_records WHERE status='failed'")
+    records = _q(
+        "SELECT COALESCE(SUM(record_count), 0) FROM ingestion_records WHERE status='success'"
     )
-    day_success = _q(
-        "SELECT COUNT(*) FROM ingestion_records WHERE created_at >= ? AND created_at < ? AND status='success'",
-        (day_start.isoformat(), day_end.isoformat()),
-    )
-    day_failed = _q(
-        "SELECT COUNT(*) FROM ingestion_records WHERE created_at >= ? AND created_at < ? AND status='failed'",
-        (day_start.isoformat(), day_end.isoformat()),
-    )
-    day_records = _q(
-        "SELECT COALESCE(SUM(record_count), 0) FROM ingestion_records WHERE created_at >= ? AND created_at < ? AND status='success'",
-        (day_start.isoformat(), day_end.isoformat()),
-    )
-    # Lifetime totals
-    life_total_runs = _q("SELECT COUNT(*) FROM ingestion_records")
-    life_records = _q("SELECT COALESCE(SUM(record_count), 0) FROM ingestion_records WHERE status='success'")
-    life_failed = _q("SELECT COUNT(*) FROM ingestion_records WHERE status='failed'")
+
+    # When did the earliest record in this DB window start?
+    earliest = _q("SELECT MIN(created_at) FROM ingestion_records")
+    if earliest:
+        window_start = datetime.fromisoformat(earliest).strftime("%Y-%m-%d %H:%M UTC")
+    else:
+        window_start = None
 
     conn.close()
 
     return {
-        "day": target_day.isoformat(),
-        "day_total_runs": day_total_runs,
-        "day_success": day_success,
-        "day_failed": day_failed,
-        "day_records": day_records,
-        "life_total_runs": life_total_runs,
-        "life_records": life_records,
-        "life_failed": life_failed,
+        "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "window_start": window_start,
+        "total_runs": total_runs,
+        "success": success,
+        "failed": failed,
+        "records": records,
     }
 
 
@@ -91,41 +82,39 @@ def send_summary(stats: dict) -> bool:
         print("Discord disabled or no webhook URL — skipping")
         return False
 
-    day = stats["day"]
-    # Color: green if no failures, amber if some, red if all failed
-    if stats["day_total_runs"] == 0:
+    window_label = stats["window_start"] or "no data yet"
+    # Color: green if no failures, amber if some, red if all failed, gray if no runs
+    if stats["total_runs"] == 0:
         color = 0x808080  # gray — no runs
-    elif stats["day_failed"] == 0:
+    elif stats["failed"] == 0:
         color = 0x00FF00  # green
-    elif stats["day_success"] == 0:
+    elif stats["success"] == 0:
         color = 0xFF0000  # red
     else:
         color = 0xFFA500  # amber
 
     success_rate = (
-        (stats["day_success"] / stats["day_total_runs"] * 100)
-        if stats["day_total_runs"] else 0
+        (stats["success"] / stats["total_runs"] * 100)
+        if stats["total_runs"] else 0
     )
 
     payload = {
         "content": None,
         "embeds": [
             {
-                "title": f"📊 Daily Ingestion Summary — {day}",
+                "title": "📊 Ingestion Summary",
                 "color": color,
                 "fields": [
-                    {"name": "Today's Runs", "value": str(stats["day_total_runs"]), "inline": True},
-                    {"name": "Successful", "value": str(stats["day_success"]), "inline": True},
-                    {"name": "Failed", "value": str(stats["day_failed"]), "inline": True},
+                    {"name": "Runs", "value": str(stats["total_runs"]), "inline": True},
+                    {"name": "Successful", "value": str(stats["success"]), "inline": True},
+                    {"name": "Failed", "value": str(stats["failed"]), "inline": True},
                     {"name": "Success Rate", "value": f"{success_rate:.1f}%", "inline": True},
-                    {"name": "Records Collected Today", "value": f"{stats['day_records']:,}", "inline": True},
+                    {"name": "Records Collected", "value": f"{stats['records']:,}", "inline": True},
                     {"name": "Environment", "value": ENVIRONMENT, "inline": True},
-                    {"name": "Lifetime Runs", "value": str(stats["life_total_runs"]), "inline": True},
-                    {"name": "Lifetime Records", "value": f"{stats['life_records']:,}", "inline": True},
-                    {"name": "Lifetime Failures", "value": str(stats["life_failed"]), "inline": True},
+                    {"name": "Since", "value": window_label, "inline": False},
                 ],
                 "footer": {
-                    "text": f"{SERVICE_NAME} • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                    "text": f"{SERVICE_NAME} • as of {stats['as_of']}",
                 },
             }
         ],
@@ -135,7 +124,7 @@ def send_summary(stats: dict) -> bool:
         with httpx.Client(timeout=15) as client:
             resp = client.post(DISCORD_WEBHOOK_URL, json=payload)
             if resp.status_code == 204:
-                print(f"Summary sent to Discord for {day}")
+                print(f"Summary sent to Discord (window since {window_label})")
                 return True
             print(f"Discord webhook failed: {resp.status_code} {resp.text[:200]}")
             return False
@@ -145,13 +134,9 @@ def send_summary(stats: dict) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Daily ingestion summary → Discord")
-    parser.add_argument("--date", type=str, default=None, help="Date to summarize (YYYY-MM-DD), default today")
-    args = parser.parse_args()
-
-    target = date.fromisoformat(args.date) if args.date else date.today()
-    stats = get_stats(target)
-    print(f"Summary for {target}: {stats}")
+    argparse.ArgumentParser(description="Daily ingestion summary → Discord").parse_args()
+    stats = get_stats()
+    print(f"Summary: {stats}")
     send_summary(stats)
 
 
