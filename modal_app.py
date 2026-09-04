@@ -34,31 +34,74 @@ import modal
 
 app = modal.App("aeroflow")
 
-image = (
+# ---------------------------------------------------------------------------
+# Images — one per service to keep builds lean
+# ---------------------------------------------------------------------------
+
+def _ignore(p) -> bool:
+    return (
+        ".venv" in str(p)
+        or "__pycache__" in str(p)
+        or ".git" in str(p)
+        or ".venv-pi" in str(p)
+    )
+
+# Ingestion image (light — fetches OpenSky, writes S3)
+ingestion_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "polars",
         "boto3",
-        "pyarrow",
         "httpx",
         "python-dotenv",
         "loguru>=0.7.3",
         "pydantic>=2.12.5",
         "pydantic-settings>=2.12.0",
-        "pyyaml>=6.0.3",
         "apscheduler>=3.11.1",
+    )
+    .add_local_dir("./ingestion", "/root/ingestion", copy=True, ignore=_ignore)
+)
+
+# Feature-engineering image (polars + plotting for reports)
+feature_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "polars>=1.0.0",
+        "boto3>=1.34.0",
+        "python-dotenv",
+        "loguru>=0.7.0",
+        "httpx>=0.27.0",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "matplotlib>=3.8.0",
+        "seaborn>=0.13.0",
+        "reportlab>=4.0.0",
+    )
+    .add_local_dir("./feature-engineering", "/root/feature", copy=True, ignore=_ignore)
+)
+
+# Model-training image (sklearn + mlflow)
+training_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "polars>=1.0.0",
+        "boto3>=1.34.0",
+        "python-dotenv",
+        "loguru>=0.7.0",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "matplotlib>=3.8.0",
+        "seaborn>=0.13.0",
+        "scikit-learn>=1.4.0",
         "mlflow==3.8.1",
-        "psycopg2-binary>=2.9.0",
-        "fastapi",
-        "uvicorn",
     )
-    # Bake the ingestion source into the image so containers can import it.
-    .add_local_dir(
-        "./ingestion",
-        "/root/ingestion",
-        copy=True,
-        ignore=lambda p: ".venv" in str(p) or "__pycache__" in str(p) or ".git" in str(p),
-    )
+    .add_local_dir("./model-training", "/root/training", copy=True, ignore=_ignore)
+)
+
+# MLflow server image
+mlflow_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("mlflow==3.8.1", "boto3>=1.34.0", "psycopg2-binary>=2.9.0")
 )
 
 secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
@@ -72,8 +115,10 @@ secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
 volume = modal.Volume.from_name("aeroflow-data", create_if_missing=True)
 VOLUME_MOUNT = "/data"
 
-# Where the ingestion source was baked into the image (see add_local_dir above)
+# Where the sources were baked into images (see add_local_dir above)
 INGESTION_ROOT = "/root/ingestion"
+FEATURE_ROOT = "/root/feature"
+TRAINING_ROOT = "/root/training"
 
 
 def _set_env_defaults() -> None:
@@ -83,6 +128,21 @@ def _set_env_defaults() -> None:
     os.environ.setdefault("DB_PATH", os.path.join(VOLUME_MOUNT, "ingestion.db"))
     os.environ.setdefault("SCHEDULER_INTERVAL_SECONDS", "900")
     os.environ.setdefault("DISCORD_ENABLED", "true")
+    os.environ.setdefault("FE_S3_PREFIX", "raw/flights/states")
+    os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{VOLUME_MOUNT}/mlflow.db")
+    os.environ.setdefault(
+        "MLFLOW_ARTIFACT_ROOT",
+        f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow",
+    )
+
+
+def _syspath(*roots: str) -> None:
+    """Add source roots to sys.path so `from src...` imports resolve."""
+    import sys
+
+    for r in roots:
+        sys.path.insert(0, r)
+        sys.path.insert(0, os.path.join(r, "src"))
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +151,7 @@ def _set_env_defaults() -> None:
 
 
 @app.function(
-    image=image,
+    image=ingestion_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
     schedule=modal.Cron("*/15 * * * *"),
@@ -100,11 +160,7 @@ def _set_env_defaults() -> None:
 def ingest_once() -> dict:
     """Run a single ingestion cycle (OpenSky → S3 + SQLite)."""
     _set_env_defaults()
-
-    import sys
-
-    sys.path.insert(0, INGESTION_ROOT)
-    sys.path.insert(0, os.path.join(INGESTION_ROOT, "src"))
+    _syspath(INGESTION_ROOT)
 
     from src.ingestion import run_ingestion
 
@@ -120,44 +176,106 @@ def ingest_once() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2/3/4. Feature / report / training (stubs — wired in later iterations)
+# 2. Feature engineering (daily) — reads raw S3, writes features S3
 # ---------------------------------------------------------------------------
 
 
 @app.function(
-    image=image,
+    image=feature_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
     schedule=modal.Cron("0 2 * * *"),
     timeout=1800,
 )
-def run_feature() -> dict:
-    """Feature engineering (daily 2 AM). TODO: wire src.pipeline.run."""
-    return {"component": "feature", "status": "stub", "at": datetime.now(timezone.utc).isoformat()}
+def run_feature(target_date: str | None = None) -> dict:
+    """Feature engineering (daily 2 AM UTC). Processes yesterday by default.
+
+    Args:
+        target_date: YYYY-MM-DD to process (defaults to yesterday).
+    """
+    _set_env_defaults()
+    _syspath(FEATURE_ROOT)
+
+    from datetime import date, timedelta
+
+    from src.pipeline.run import run_feature_pipeline
+
+    if target_date:
+        d = date.fromisoformat(target_date)
+    else:
+        d = date.today() - timedelta(days=1)
+
+    s3_url = run_feature_pipeline(d)
+    return {"component": "feature", "status": "ok", "date": str(d), "s3_url": s3_url}
+
+
+# ---------------------------------------------------------------------------
+# 3. Daily report (daily) — builds PDF from features, uploads to S3
+# ---------------------------------------------------------------------------
 
 
 @app.function(
-    image=image,
+    image=feature_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
     schedule=modal.Cron("0 3 * * *"),
     timeout=1800,
 )
-def run_report() -> dict:
-    """Daily report (daily 3 AM). TODO: wire src.features.daily_report."""
-    return {"component": "report", "status": "stub", "at": datetime.now(timezone.utc).isoformat()}
+def run_report(target_date: str | None = None) -> dict:
+    """Daily report (daily 3 AM UTC). Generates PDF for yesterday by default.
+
+    Args:
+        target_date: YYYY-MM-DD to process (defaults to yesterday).
+    """
+    _set_env_defaults()
+    _syspath(FEATURE_ROOT)
+
+    from datetime import date, timedelta
+
+    from src.features.daily_report import generate_daily_report
+
+    if target_date:
+        d = date.fromisoformat(target_date)
+    else:
+        d = date.today() - timedelta(days=1)
+
+    generate_daily_report(d)
+    return {"component": "report", "status": "ok", "date": str(d)}
+
+
+# ---------------------------------------------------------------------------
+# 4. Model training (every 3 days) — trains on features, logs to MLflow
+# ---------------------------------------------------------------------------
 
 
 @app.function(
-    image=image,
+    image=training_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
     schedule=modal.Cron("0 2 */3 * *"),
     timeout=3600,
 )
-def run_training() -> dict:
-    """Model training (every 3 days at 2 AM). TODO: wire src.training.train."""
-    return {"component": "training", "status": "stub", "at": datetime.now(timezone.utc).isoformat()}
+def run_training(end_date: str | None = None) -> dict:
+    """Model training (every 3 days at 2 AM UTC). Trains on rolling window
+    ending yesterday by default. Logs to MLflow (web_server on Modal).
+
+    Args:
+        end_date: YYYY-MM-DD last day of the training window (default yesterday).
+    """
+    _set_env_defaults()
+    _syspath(TRAINING_ROOT)
+
+    from datetime import date, timedelta
+
+    from src.training.train import train_model
+
+    if end_date:
+        d = date.fromisoformat(end_date)
+    else:
+        d = date.today() - timedelta(days=1)
+
+    result = train_model(d)
+    return {"component": "training", "status": "ok", "end_date": str(d), **result}
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +284,7 @@ def run_training() -> dict:
 
 
 @app.function(
-    image=image,
+    image=mlflow_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
 )

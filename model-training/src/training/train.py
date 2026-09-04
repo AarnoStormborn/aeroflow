@@ -139,7 +139,13 @@ def train_model(end_date: date) -> dict:
             "test_r2": test_r2,
         }
 
-        mlflow.log_metrics(metrics)
+        # Filter out NaN metrics (e.g. test_r2 when test set is degenerate)
+        # — MLflow's SQLite backend errors on NaN in batch log_metrics.
+        import math
+
+        loggable = {k: v for k, v in metrics.items()
+                    if not (isinstance(v, float) and math.isnan(v))}
+        mlflow.log_metrics(loggable)
 
         print("\nMetrics:")
         print(f"  Train MAE: {train_mae:.2f}, Test MAE: {test_mae:.2f}")
