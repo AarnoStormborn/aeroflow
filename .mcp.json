@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mlflow-mcp": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--with", "mlflow[mcp]>=3.5.1", "mlflow", "mcp", "run"],
+      "env": {
+        "MLFLOW_TRACKING_URI": "https://harshsingh90220--aeroflow-mlflow-ui.modal.run",
+        "MLFLOW_MCP_TOOLS": "ml"
+      }
+    }
+  }
+}
