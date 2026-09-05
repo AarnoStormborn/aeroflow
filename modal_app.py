@@ -2,29 +2,29 @@
 Aeroflow — single Modal app with multiple components.
 
 Components:
-  - ingest_once      : scheduled ingestion (OpenSky → S3 raw + SQLite record)
-  - run_feature      : scheduled feature engineering (stub)
-  - run_report       : scheduled daily report (stub)
-  - run_training     : scheduled model training (stub)
+  - run_feature      : scheduled feature engineering (daily)
+  - run_report       : scheduled daily report (daily)
+  - run_training     : scheduled model training (every 3 days)
   - mlflow_ui        : MLflow tracking server as a web_server
+
+Note: Ingestion (OpenSky → S3) runs on a Raspberry Pi via systemd, not
+on Modal — Modal's deployed-function egress is blocked by OpenSky.
 
 Deploy:
     modal deploy modal_app.py
 
 Secrets (Modal Secret named "aeroflow-env"):
-    OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET_NAME
+    OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET (only if re-adding ingestion)
     DISCORD_WEBHOOK_URL, DISCORD_ENABLED
-    DB_PATH=/data/ingestion.db
 
 Volume:
-    aeroflow-data  (mounted at /data — holds ingestion.db, mlflow.db)
+    aeroflow-data  (mounted at /data — holds mlflow.db)
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
 import modal
 
@@ -45,22 +45,6 @@ def _ignore(p) -> bool:
         or ".git" in str(p)
         or ".venv-pi" in str(p)
     )
-
-# Ingestion image (light — fetches OpenSky, writes S3)
-ingestion_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .pip_install(
-        "polars",
-        "boto3",
-        "httpx",
-        "python-dotenv",
-        "loguru>=0.7.3",
-        "pydantic>=2.12.5",
-        "pydantic-settings>=2.12.0",
-        "apscheduler>=3.11.1",
-    )
-    .add_local_dir("./ingestion", "/root/ingestion", copy=True, ignore=_ignore)
-)
 
 # Feature-engineering image (polars + plotting for reports)
 feature_image = (
@@ -125,7 +109,6 @@ volume = modal.Volume.from_name("aeroflow-data", create_if_missing=True)
 VOLUME_MOUNT = "/data"
 
 # Where the sources were baked into images (see add_local_dir above)
-INGESTION_ROOT = "/root/ingestion"
 FEATURE_ROOT = "/root/feature"
 TRAINING_ROOT = "/root/training"
 
@@ -134,8 +117,6 @@ def _set_env_defaults() -> None:
     """Ensure env vars the code expects are set, with sensible defaults."""
     os.environ.setdefault("AWS_S3_BUCKET_NAME", "flights-forecasting")
     os.environ.setdefault("AWS_REGION", "us-east-1")
-    os.environ.setdefault("DB_PATH", os.path.join(VOLUME_MOUNT, "ingestion.db"))
-    os.environ.setdefault("SCHEDULER_INTERVAL_SECONDS", "900")
     os.environ.setdefault("DISCORD_ENABLED", "true")
     os.environ.setdefault("FE_S3_PREFIX", "raw/flights/states")
     os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{VOLUME_MOUNT}/mlflow.db")
@@ -155,37 +136,7 @@ def _syspath(*roots: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. Scheduled ingestion
-# ---------------------------------------------------------------------------
-
-
-@app.function(
-    image=ingestion_image,
-    secrets=[secrets],
-    volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("*/15 * * * *"),
-    timeout=300,
-)
-def ingest_once() -> dict:
-    """Run a single ingestion cycle (OpenSky → S3 + SQLite)."""
-    _set_env_defaults()
-    _syspath(INGESTION_ROOT)
-
-    from src.ingestion import run_ingestion
-
-    result = run_ingestion()
-
-    return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": result.status.value,
-        "record_count": result.record_count,
-        "s3_path": result.s3_path,
-        "error_message": result.error_message,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 2. Feature engineering (daily) — reads raw S3, writes features S3
+# 1. Feature engineering (daily) — reads raw S3, writes features S3
 # ---------------------------------------------------------------------------
 
 
@@ -219,7 +170,7 @@ def run_feature(target_date: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 3. Daily report (daily) — builds PDF from features, uploads to S3
+# 2. Daily report (daily) — builds PDF from features, uploads to S3
 # ---------------------------------------------------------------------------
 
 
@@ -253,7 +204,7 @@ def run_report(target_date: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4. Model training (every 3 days) — trains on features, logs to MLflow
+# 3. Model training (every 3 days) — trains on features, logs to MLflow
 # ---------------------------------------------------------------------------
 
 
@@ -288,7 +239,7 @@ def run_training(end_date: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 5. MLflow tracking server
+# 4. MLflow tracking server
 # ---------------------------------------------------------------------------
 
 
@@ -332,6 +283,5 @@ def mlflow_ui():
 
 @app.local_entrypoint()
 def main():
-    """Run one ingestion locally, then exit (useful for testing)."""
-    result = ingest_once.local()
-    print(result)
+    """Local entrypoint for `modal run` — run feature for yesterday as a smoke test."""
+    print(run_feature.local())
