@@ -22,3 +22,5 @@ reports/
 
 # SSH keys
 *.pem
+model-training/mlflow.db
+model-training/mlruns/
