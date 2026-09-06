@@ -295,14 +295,15 @@ def run_forecast() -> dict:
     timeout=600,
 )
 def run_eval() -> dict:
-    """Daily eval: compare stored forecasts against actuals by horizon."""
+    """Daily eval + Discord quality report (MAPE by horizon with graph)."""
     _set_env_defaults()
     _syspath(FORECAST_ROOT)
 
-    from src.forecasting.models.evaluator import run_eval as _re
+    # Evaluates forecasts vs actuals and posts the report+graph to Discord.
+    from src.forecasting.models.quality_report import main as _report
 
-    results = _re()
-    return {"component": "eval", "status": "ok", "evaluated": len(results)}
+    _report()
+    return {"component": "eval", "status": "ok"}
 
 
 # ---------------------------------------------------------------------------
