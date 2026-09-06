@@ -112,6 +112,8 @@ forecast_image = (
         "xgboost>=2.0.0",
         "mlflow==3.15.2",
         "anyio>=4.0.0",
+        "matplotlib>=3.8.0",
+        "httpx>=0.27.0",
     )
     .add_local_dir("./forecasting", "/root/forecast", copy=True, ignore=_ignore)
 )
