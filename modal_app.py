@@ -5,6 +5,8 @@ Components:
   - run_feature      : scheduled feature engineering (daily)
   - run_report       : scheduled daily report (daily)
   - run_training     : scheduled model training (every 3 days)
+  - run_forecast     : hourly forecast (1h + 6h recursive) → S3
+  - run_eval         : daily forecast-vs-actual evaluation
   - mlflow_ui        : MLflow tracking server as a web_server
 
 Note: Ingestion (OpenSky → S3) runs on a Raspberry Pi via systemd, not
@@ -97,6 +99,24 @@ mlflow_image = (
     )
 )
 
+# Forecasting image (loads model from MLflow, predicts, writes S3)
+forecast_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "polars>=1.0.0",
+        "boto3>=1.34.0",
+        "python-dotenv",
+        "loguru>=0.7.0",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "scikit-learn>=1.4.0",
+        "xgboost>=2.0.0",
+        "mlflow==3.8.1",
+        "anyio>=4.0.0,<4.14",
+    )
+    .add_local_dir("./forecasting", "/root/forecast", copy=True, ignore=_ignore)
+)
+
 secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
     "OPENSKY_CLIENT_ID",
     "OPENSKY_CLIENT_SECRET",
@@ -111,6 +131,7 @@ VOLUME_MOUNT = "/data"
 # Where the sources were baked into images (see add_local_dir above)
 FEATURE_ROOT = "/root/feature"
 TRAINING_ROOT = "/root/training"
+FORECAST_ROOT = "/root/forecast"
 
 
 def _set_env_defaults() -> None:
@@ -120,6 +141,12 @@ def _set_env_defaults() -> None:
     os.environ.setdefault("DISCORD_ENABLED", "true")
     os.environ.setdefault("FE_S3_PREFIX", "raw/flights/states")
     os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{VOLUME_MOUNT}/mlflow.db")
+    # Forecast loads the registered model from the Modal MLflow server (reachable
+    # from both local dev and Modal functions); model artifacts live in S3.
+    os.environ.setdefault(
+        "FORECAST_MLFLOW_TRACKING_URI",
+        "https://harshsingh90220--aeroflow-mlflow-ui.modal.run",
+    )
     os.environ.setdefault(
         "MLFLOW_ARTIFACT_ROOT",
         f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow",
@@ -239,7 +266,48 @@ def run_training(end_date: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4. MLflow tracking server
+# 4. Forecasting (hourly: 1h + 6h recursive forecasts; eval daily)
+# ---------------------------------------------------------------------------
+
+
+@app.function(
+    image=forecast_image,
+    secrets=[secrets],
+    volumes={VOLUME_MOUNT: volume},
+    schedule=modal.Cron("15 * * * *"),  # every hour at :15
+    timeout=600,
+)
+def run_forecast() -> dict:
+    """Run hourly forecast: next-hour + next-6h (recursive), store to S3."""
+    _set_env_defaults()
+    _syspath(FORECAST_ROOT)
+
+    from src.forecasting.models.forecaster import run_forecast as _rf
+
+    result = _rf()
+    return {"component": "forecast", "status": "ok", "generated_at": result["generated_at"]}
+
+
+@app.function(
+    image=forecast_image,
+    secrets=[secrets],
+    volumes={VOLUME_MOUNT: volume},
+    schedule=modal.Cron("30 1 * * *"),  # daily 01:30 UTC
+    timeout=600,
+)
+def run_eval() -> dict:
+    """Daily eval: compare stored forecasts against actuals by horizon."""
+    _set_env_defaults()
+    _syspath(FORECAST_ROOT)
+
+    from src.forecasting.models.evaluator import run_eval as _re
+
+    results = _re()
+    return {"component": "eval", "status": "ok", "evaluated": len(results)}
+
+
+# ---------------------------------------------------------------------------
+# 5. MLflow tracking server
 # ---------------------------------------------------------------------------
 
 
