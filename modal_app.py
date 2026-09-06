@@ -79,21 +79,20 @@ training_image = (
         "matplotlib>=3.8.0",
         "seaborn>=0.13.0",
         "scikit-learn>=1.4.0",
-        "mlflow==3.8.1",
-        "anyio>=4.0.0,<4.14",
+        "mlflow==3.15.2",
+        "anyio>=4.0.0",
     )
     .add_local_dir("./model-training", "/root/training", copy=True, ignore=_ignore)
 )
 
-# MLflow server image — MLflow 3.8.1 breaks with anyio>=4.14 (lazy
-# submodule imports); pin anyio<4.14 for from_thread attribute access.
+# MLflow server image
 mlflow_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "mlflow==3.8.1",
+        "mlflow==3.15.2",
         "boto3>=1.34.0",
         "psycopg2-binary>=2.9.0",
-        "anyio>=4.0.0,<4.14",
+        "anyio>=4.0.0",
         "fastapi",
         "uvicorn",
     )
@@ -111,8 +110,8 @@ forecast_image = (
         "pydantic-settings>=2.0.0",
         "scikit-learn>=1.4.0",
         "xgboost>=2.0.0",
-        "mlflow==3.8.1",
-        "anyio>=4.0.0,<4.14",
+        "mlflow==3.15.2",
+        "anyio>=4.0.0",
     )
     .add_local_dir("./forecasting", "/root/forecast", copy=True, ignore=_ignore)
 )
