@@ -27,11 +27,13 @@ class S3Settings(BaseSettings):
 class ForecastSettings(BaseSettings):
     """Forecasting configuration."""
 
-    # MLflow model to load for predictions
+    # MLflow model to load for predictions. Currently: flight-traffic-hourly
+    # (trained on current Sep data — matches today's traffic regime). The
+    # older flight-traffic-forecaster (trained Dec-Jan) is kept for reference.
     mlflow_tracking_uri: str = Field(
         default="https://harshsingh90220--aeroflow-mlflow-ui.modal.run"
     )
-    registered_model: str = Field(default="flight-traffic-forecaster")
+    registered_model: str = Field(default="flight-traffic-hourly")
     model_stage: str = Field(default="Production")
 
     # Forecast horizons (hours)
