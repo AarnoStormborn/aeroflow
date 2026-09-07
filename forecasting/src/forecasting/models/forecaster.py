@@ -1,14 +1,18 @@
 """
-Forecast engine: computes hourly (1h) and quarter-daily (6h) forecasts
-using recursive prediction with the registered production model.
+Forecast engine: runs MULTIPLE registered models in parallel.
 
-Recursive approach:
+Each model (e.g. the Dec-Jan forecaster and the Sep-current hourly model)
+produces its own hourly (1h) + quarter-daily (6h) recursive forecast for
+the SAME target hours, so predictions can be compared against actuals to
+see which model performs better.
+
+Recursive approach (per model):
 - Predict next hour from actuals (lag_1h = last actual hour).
 - Feed the prediction back as lag_1h for the following hour; lag_24h uses
   actuals from 24h ago (known); rolling_mean_6h mixes actuals + predictions.
 
-Outputs are written to S3 (forecasts/hourly/...) so they can later be
-compared against actuals by an evaluation job.
+Outputs are written to S3 (forecasts/hourly/...) tagged by model name so
+the evaluation job can score each model separately.
 """
 
 import json
@@ -24,10 +28,10 @@ from src.forecasting.data.loader import RecentDataLoader, build_feature_vector
 
 
 class ForecastEngine:
-    """Recursive forecasting with the registered MLflow model."""
+    """Run recursive forecasting across several registered models."""
 
     def __init__(self):
-        self.model = None
+        self.models: dict[str, Any] = {}  # model name -> loaded model
         self.loader = RecentDataLoader()
         self.feature_cols = settings.forecast.feature_columns
         self.bucket = settings.s3.bucket_name
@@ -37,75 +41,79 @@ class ForecastEngine:
             aws_access_key_id=settings.s3.access_key_id,
             aws_secret_access_key=settings.s3.secret_access_key,
         )
+        self.horizon = settings.forecast.quarter_day_horizon  # 6h
 
-    def _load_model(self):
-        if self.model is None:
-            model_uri = (
-                f"models:/{settings.forecast.registered_model}/"
-                f"{settings.forecast.model_stage}"
-            )
+    def _load_model(self, name: str, stage: str):
+        """Load a single model (cached)."""
+        if name not in self.models:
+            model_uri = f"models:/{name}/{stage}"
             mlflow.set_tracking_uri(settings.forecast.mlflow_tracking_uri)
             logger.info(f"Loading model {model_uri}")
-            self.model = mlflow.sklearn.load_model(model_uri)
-        return self.model
+            self.models[name] = mlflow.sklearn.load_model(model_uri)
+        return self.models[name]
 
-    def _next_hour(self, target_hour: datetime) -> float:
-        """Predict flight count for a single target hour (recursive-aware)."""
-        # Build features from actuals + accumulated predictions in self._predicted
-        features = build_feature_vector(
-            self._hourly,
-            target_hour,
-            predicted_counts=self._predicted,
-        )
-        X = pl.DataFrame([dict(zip(self.feature_cols, features, strict=True))]).to_numpy()
-        pred = float(self.model.predict(X)[0])
-        return pred
-
-    def forecast(self, now: datetime | None = None) -> dict[str, Any]:
-        """
-        Run a forecast: next-hour + next-6-hours, recursively.
-
-        Returns a dict with forecast metadata + per-hour predictions.
-        """
-        now = now or datetime.now(timezone.utc)
-        self._load_model()  # ensure model is loaded
-
-        # Current truncated hour; we predict from the NEXT hour onward.
-        current_hour = now.replace(minute=0, second=0, microsecond=0)
-        horizon = settings.forecast.quarter_day_horizon  # 6h
-
-        # Load actuals covering enough history (lag_24h + rolling 6h + buffer)
-        self._hourly = self.loader.load_recent_hourly(days=4)
-        self._predicted: dict[datetime, float] = {}
-
+    def _predict_one_model(self, model, hourly, current_hour: datetime) -> list[dict]:
+        """Recursive forecast for ONE model: h=1..6. Returns predictions."""
+        # Map of future-hour predictions built up during recursion (per model,
+        # so each model's recursion uses ITS OWN predictions as lag inputs).
+        predicted: dict[datetime, float] = {}
         predictions: list[dict] = []
-        target = current_hour + timedelta(hours=1)  # first future hour
-        for step in range(1, horizon + 1):
-            pred_val = self._next_hour(target)
+
+        target = current_hour + timedelta(hours=1)
+        for step in range(1, self.horizon + 1):
+            features = build_feature_vector(hourly, target, predicted_counts=predicted)
+            X = pl.DataFrame(
+                [dict(zip(self.feature_cols, features, strict=True))]
+            ).to_numpy()
+            pred_val = float(model.predict(X)[0])
             predictions.append({
                 "hour_start": target.isoformat(),
                 "horizon_hours": step,
                 "predicted_flight_count": round(pred_val, 2),
             })
-            # Feed prediction back for the recursion
-            self._predicted[target] = pred_val
+            predicted[target] = pred_val  # feed back for recursion
             target += timedelta(hours=1)
+        return predictions
 
-        # Snapshot the latest actual hour used (for eval alignment)
+    def forecast(self, now: datetime | None = None) -> dict[str, Any]:
+        """Run forecasts for every configured model in parallel."""
+        now = now or datetime.now(timezone.utc)
+
+        # Load actuals once (shared across models)
+        hourly = self.loader.load_recent_hourly(days=4)
+
+        # The last COMPLETE hour: the current hour may be partial (ingestion
+        # runs mid-hour), so only use hours strictly before now's hour.
+        now_hour = now.replace(minute=0, second=0, microsecond=0)
+        complete = hourly.filter(pl.col("hour_start") < now_hour)
         last_actual = (
-            self._hourly.select(pl.col("hour_start").max()).item()
-            if not self._hourly.is_empty() else None
+            complete.select(pl.col("hour_start").max()).item()
+            if not complete.is_empty() else None
         )
+        if last_actual is None:
+            raise ValueError("No complete actual hour available for forecasting")
+
+        # Forecast from the hour AFTER the last complete actual hour, so all
+        # lag/rolling inputs (lag_1h, lag_24h, rolling 6h) are actuals or
+        # prior recursion outputs — never an incomplete current hour.
+        current_hour = last_actual
+        last_actual_str = last_actual.isoformat()
+
+        # Run each model
+        models_out = {}
+        for name, stage in settings.forecast.models:
+            model = self._load_model(name, stage)
+            preds = self._predict_one_model(model, hourly, current_hour)
+            models_out[name] = {
+                "model_stage": stage,
+                "hourly": preds[0],        # h=1
+                "quarter_daily": preds,    # h=1..6
+            }
 
         result = {
             "generated_at": now.isoformat(),
-            "model": settings.forecast.registered_model,
-            "model_stage": settings.forecast.model_stage,
-            "last_actual_hour": last_actual.isoformat() if last_actual else None,
-            "horizons": {
-                "hourly": predictions[0],
-                "quarter_daily": predictions,
-            },
+            "last_actual_hour": last_actual_str,
+            "models": models_out,  # keyed by model name for comparison
         }
         return result
 
@@ -124,7 +132,7 @@ class ForecastEngine:
 
 
 def run_forecast() -> dict:
-    """Run a forecast and persist it. Returns the result dict."""
+    """Run a multi-model forecast and persist it. Returns the result dict."""
     engine = ForecastEngine()
     result = engine.forecast()
     engine.save_forecast(result)

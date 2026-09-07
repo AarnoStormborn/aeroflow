@@ -27,14 +27,17 @@ class S3Settings(BaseSettings):
 class ForecastSettings(BaseSettings):
     """Forecasting configuration."""
 
-    # MLflow model to load for predictions. Currently: flight-traffic-hourly
-    # (trained on current Sep data — matches today's traffic regime). The
-    # older flight-traffic-forecaster (trained Dec-Jan) is kept for reference.
+    # MLflow models to run in PARALLEL for comparison. Each produces
+    # predictions for the same hours so we can evaluate which model performs
+    # better against actuals.
     mlflow_tracking_uri: str = Field(
         default="https://harshsingh90220--aeroflow-mlflow-ui.modal.run"
     )
-    registered_model: str = Field(default="flight-traffic-hourly")
-    model_stage: str = Field(default="Production")
+    # (name, stage) pairs — both are run + stored per forecast
+    models: list[tuple[str, str]] = Field(default=[
+        ("flight-traffic-forecaster", "Production"),  # trained Dec-Jan
+        ("flight-traffic-hourly", "Production"),      # trained Sep (current)
+    ])
 
     # Forecast horizons (hours)
     hourly_horizon: int = Field(default=1)   # next hour

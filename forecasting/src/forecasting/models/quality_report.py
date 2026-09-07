@@ -1,9 +1,9 @@
 """
-Forecast quality report → Discord.
+Forecast quality report → Discord (multi-model comparison).
 
 Runs the forecast evaluator, aggregates per-horizon MAPE across all
-evaluable forecasts, renders a bar chart (MAPE by horizon h=1..6), and
-posts it to Discord as an embed with the graph attached.
+evaluable forecasts FOR EACH MODEL, renders a grouped bar chart
+(MAPE by horizon, one bar series per model), and posts it to Discord.
 
 Run daily (Modal run_eval) once enough forecasts have elapsed.
 """
@@ -26,52 +26,67 @@ try:
 except ImportError:
     pass
 import matplotlib.pyplot as plt
-from src.forecasting.config import settings
+import numpy as np
 from src.forecasting.models.evaluator import ForecastEvaluator
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 DISCORD_ENABLED = os.environ.get("DISCORD_ENABLED", "true").lower() == "true"
 
 
-def aggregate_by_horizon(evals: list[dict]) -> dict[str, dict]:
-    """Aggregate per-horizon MAPE across forecasts.
+def aggregate_by_model_horizon(evals: list[dict]) -> dict[str, dict[str, dict]]:
+    """Aggregate per-model per-horizon MAPE across forecasts.
 
-    Each eval has per_horizon_mean_mape = {"1": x, ..., "6": y}.
-    Returns {horizon: {"mean_mape": ..., "n": ...}}.
+    evals: [{models: {name: {per_horizon_mean_mape: {h: mape}}}}]
+    Returns {model_name: {horizon: {"mean_mape": ..., "n": ...}}}.
     """
-    horizon_mape: dict[str, list[float]] = {}
+    out: dict[str, dict[str, dict]] = {}
     for e in evals:
-        for h, m in e.get("per_horizon_mean_mape", {}).items():
-            if m is not None:
-                horizon_mape.setdefault(h, []).append(m)
-    out = {}
-    for h in sorted(horizon_mape, key=int):
-        vals = horizon_mape[h]
-        out[h] = {"mean_mape": sum(vals) / len(vals), "n": len(vals)}
-    return out
+        for name, m in e.get("models", {}).items():
+            model_agg = out.setdefault(name, {})
+            for h, mape in m.get("per_horizon_mean_mape", {}).items():
+                if mape is None:
+                    continue
+                bucket = model_agg.setdefault(h, {"mape": [], "n": 0})
+                bucket["mape"].append(mape)
+    # Collapse
+    result: dict[str, dict[str, dict]] = {}
+    for name, horizons in out.items():
+        result[name] = {
+            h: {"mean_mape": sum(b["mape"]) / len(b["mape"]), "n": len(b["mape"])}
+            for h, b in sorted(horizons.items(), key=lambda kv: int(kv[0]))
+        }
+    return result
 
 
-def render_graph(agg: dict[str, dict]) -> bytes:
-    """Bar chart of mean MAPE by forecast horizon. Returns PNG bytes."""
-    horizons = sorted(agg.keys(), key=int)
-    mapes = [agg[h]["mean_mape"] for h in horizons]
-    ns = [agg[h]["n"] for h in horizons]
+def render_graph(agg: dict[str, dict[str, dict]]) -> bytes:
+    """Grouped bar chart: MAPE by horizon, one series per model."""
+    # Collect all horizons across models
+    all_h = sorted({h for m in agg.values() for h in m.keys()}, key=int)
+    model_names = list(agg.keys())
+    colors = ["#5865F2", "#57F287", "#FEE75C", "#EB459E"]  # discord palette
+    short = {n: n.replace("flight-traffic-", "") for n in model_names}
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.bar(horizons, mapes, color="#5865F2", alpha=0.85)
-    ax.set_xlabel("Forecast Horizon (hours)")
+    fig, ax = plt.subplots(figsize=(9, 5))
+    width = 0.35 / max(len(model_names), 1)
+    for i, name in enumerate(model_names):
+        m = agg[name]
+        mapes = [m.get(h, {}).get("mean_mape", 0) for h in all_h]
+        x = np.arange(len(all_h)) + i * width
+        bars = ax.bar(x, mapes, width, label=short[name], color=colors[i % len(colors)],
+                      alpha=0.85)
+        for bar, v in zip(bars, mapes, strict=True):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                    f"{v:.1f}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(np.arange(len(all_h)) + width * (len(model_names) - 1) / 2)
+    ax.set_xticklabels([f"{h}h" for h in all_h])
+    ax.set_xlabel("Forecast Horizon")
     ax.set_ylabel("Mean MAPE (%)")
-    ax.set_title("Forecast Accuracy by Horizon (recursive)")
-    ax.set_ylim(0, max(mapes) * 1.25 if mapes else 1)
-
-    for bar, m, n in zip(bars, mapes, ns, strict=True):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
-                f"{m:.1f}%", ha="center", va="bottom", fontsize=9)
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() / 2,
-                f"n={n}", ha="center", va="center", fontsize=8, color="white")
-
+    ax.set_title("Forecast Accuracy by Horizon — Model Comparison")
+    ax.legend()
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
+
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=130)
     plt.close(fig)
@@ -79,28 +94,39 @@ def render_graph(agg: dict[str, dict]) -> bytes:
     return buf.getvalue()
 
 
-def send_discord_report(agg: dict[str, dict], png_bytes: bytes, n_forecasts: int) -> bool:
-    """Post the report embed + graph to Discord via webhook."""
+def send_discord_report(agg: dict[str, dict[str, dict]], png_bytes: bytes,
+                        n_forecasts: int) -> bool:
     if not DISCORD_ENABLED or not DISCORD_WEBHOOK_URL:
         print("Discord disabled or no webhook — skipping")
         return False
 
-    # Text summary for the embed
+    short = {n: n.replace("flight-traffic-", "") for n in agg}
     lines = []
-    for h in sorted(agg.keys(), key=int):
-        a = agg[h]
-        lines.append(f"**h={h}h:** {a['mean_mape']:.1f}% MAPE ({a['n']} forecasts)")
+    for name, horizons in agg.items():
+        h1 = horizons.get("1", {})
+        h1v = h1.get("mean_mape")
+        line = f"**{short[name]}:** "
+        if h1v is not None:
+            line += f"h=1 MAPE {h1v:.1f}% ({h1.get('n', 0)} fcst)"
+            # worst horizon
+            worst = max(horizons.values(), key=lambda b: b["mean_mape"])
+            line += f" | worst {worst['mean_mape']:.1f}%"
+        else:
+            line += "no data"
+        lines.append(line)
     summary_text = "\n".join(lines) if lines else "No evaluable forecasts yet."
 
-    color = 0x00FF00 if all(a["mean_mape"] < 15 for a in agg.values()) else 0xFFA500
+    color = 0x00FF00 if all(
+        h.get("mean_mape", 99) < 25 for m in agg.values() for h in m.values()
+    ) else 0xFFA500
 
     embed = {
-        "title": "📈 Forecast Quality Report",
+        "title": "📈 Forecast Quality — Model Comparison",
         "color": color,
-        "description": f"Recursive prediction accuracy by horizon.\n\n{summary_text}",
+        "description": f"Per-model recursive accuracy by horizon.\n\n{summary_text}",
         "fields": [
             {"name": "Forecasts evaluated", "value": str(n_forecasts), "inline": True},
-            {"name": "Model", "value": settings.forecast.registered_model, "inline": True},
+            {"name": "Models", "value": ", ".join(short.values()), "inline": True},
         ],
         "footer": {
             "text": f"as of {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
@@ -108,21 +134,13 @@ def send_discord_report(agg: dict[str, dict], png_bytes: bytes, n_forecasts: int
         "image": {"url": "attachment://forecast_accuracy.png"},
     }
 
-    payload = {
-        "content": None,
-        "embeds": [embed],
-    }
-    files = {
-        "forecast_accuracy.png": ("forecast_accuracy.png", png_bytes,
-                                  "image/png"),
-    }
-    # Webhook with file: multipart form
+    payload = {"content": None, "embeds": [embed]}
+    files = {"forecast_accuracy.png": ("forecast_accuracy.png", png_bytes, "image/png")}
     try:
         with httpx.Client(timeout=20) as client:
-            # Discord supports files via multipart with payload_json
-            data = {"payload_json": json.dumps(payload)}
-            resp = client.post(DISCORD_WEBHOOK_URL, data=data, files=files)
-            if resp.status_code == 204 or resp.status_code == 200:
+            resp = client.post(DISCORD_WEBHOOK_URL,
+                               data={"payload_json": json.dumps(payload)}, files=files)
+            if resp.status_code in (200, 204):
                 print("Forecast quality report sent to Discord")
                 return True
             print(f"Discord webhook failed: {resp.status_code} {resp.text[:300]}")
@@ -139,13 +157,12 @@ def main():
         print("No forecasts old enough to evaluate yet — skipping report.")
         return
 
-    agg = aggregate_by_horizon(evals)
+    agg = aggregate_by_model_horizon(evals)
+    print("=== Forecast Quality (per model) ===")
+    for name, horizons in agg.items():
+        for h, b in horizons.items():
+            print(f"  {name} h={h}: {b['mean_mape']:.2f}% ({b['n']} fcst)")
     png = render_graph(agg)
-    # Print the table too
-    print("=== Forecast Quality ===")
-    for h in sorted(agg.keys(), key=int):
-        a = agg[h]
-        print(f"  h={h}: mean MAPE {a['mean_mape']:.2f}% ({a['n']} forecasts)")
     send_discord_report(agg, png, len(evals))
 
 
