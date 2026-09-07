@@ -60,21 +60,37 @@ class ForecastEvaluator:
             fc.get("model", "unknown"): fc["horizons"]["quarter_daily"],
         }
 
-    def evaluate_forecast(self, key: str) -> dict | None:
+    def _load_actuals(self, min_hour: datetime, max_hour: datetime) -> dict[datetime, float]:
+        """Load actual hourly counts covering [min_hour, max_hour] with buffer."""
+        # Load from min_hour - 2 days (for rolling) through max_hour + 1 day
+        start_day = (min_hour - timedelta(days=2)).date()
+        end_day = (max_hour + timedelta(days=1)).date()
+        days = (end_day - start_day).days + 1
+        hourly = self.loader.load_recent_hourly(days=max(days, 3))
+        actuals: dict[datetime, float] = {}
+        for row in hourly.iter_rows(named=True):
+            actuals[row["hour_start"]] = float(row["flight_count"])
+        return actuals
+
+    def evaluate_forecast(
+        self, key: str, actuals: dict[datetime, float], now: datetime | None = None
+    ) -> dict | None:
         """Evaluate one forecast file per model. Returns None if actuals
-        haven't elapsed yet."""
+        haven't elapsed yet.
+
+        Args:
+            key: S3 key of the forecast
+            actuals: preloaded {hour_start: flight_count} lookup
+            now: current time (defaults to now)
+        """
+        now = now or datetime.now(timezone.utc)
         resp = self._s3.get_object(Bucket=self.bucket, Key=key)
         fc = json.loads(resp["Body"].read())
 
         generated = datetime.fromisoformat(fc["generated_at"])
         needed = generated + timedelta(hours=self.quarter_horizon + 1)
-        if datetime.now(timezone.utc) < needed:
+        if now < needed:
             return None  # not enough actuals yet
-
-        hourly = self.loader.load_recent_hourly(days=8)
-        actuals: dict[datetime, float] = {}
-        for row in hourly.iter_rows(named=True):
-            actuals[row["hour_start"]] = float(row["flight_count"])
 
         models_preds = self._model_predictions(fc)
         per_model: dict[str, dict[str, Any]] = {}
@@ -129,11 +145,52 @@ class ForecastEvaluator:
         }
 
     def evaluate_all(self) -> list[dict]:
-        """Evaluate all forecasts old enough to have actuals."""
+        """Evaluate all forecasts old enough to have actuals.
+
+        Loads actuals ONCE (not per forecast) for efficiency.
+        """
+        now = datetime.now(timezone.utc)
+        keys = self._list_forecasts()
         evals = []
-        for key in self._list_forecasts():
+
+        # Find the oldest forecast to size the actuals window
+        min_generated = now
+        parseable = []
+        for key in keys:
             try:
-                ev = self.evaluate_forecast(key)
+                fc = json.loads(
+                    self._s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+                )
+                gen = datetime.fromisoformat(fc["generated_at"])
+                parseable.append((key, gen))
+                if gen < min_generated:
+                    min_generated = gen
+            except Exception as e:
+                logger.warning(f"Skipping unreadable forecast {key}: {e}")
+
+        if not parseable:
+            return []
+
+        # Only forecasts old enough matter; compute actuals window once
+        eligible = [
+            (key, gen) for key, gen in parseable
+            if (now - gen).total_seconds() >= (self.quarter_horizon + 1) * 3600
+        ]
+        if not eligible:
+            logger.info("No forecasts old enough to evaluate yet")
+            return []
+
+        # Latest target hour among eligible forecasts determines how much
+        # actual history we need (from oldest eligible's first prediction)
+        oldest = min(gen for _, gen in eligible)
+        min_hour = oldest
+        max_hour = now
+        actuals = self._load_actuals(min_hour, max_hour)
+        logger.info(f"Loaded actuals once: {len(actuals)} hours for {len(eligible)} forecasts")
+
+        for key, _ in sorted(eligible, key=lambda x: x[1]):
+            try:
+                ev = self.evaluate_forecast(key, actuals, now)
                 if ev:
                     evals.append(ev)
             except Exception as e:
