@@ -197,6 +197,24 @@ def run_feature(target_date: str | None = None) -> dict:
     return {"component": "feature", "status": "ok", "date": str(d), "s3_url": s3_url}
 
 
+@app.function(
+    image=feature_image,
+    secrets=[secrets],
+    volumes={VOLUME_MOUNT: volume},
+    schedule=modal.Cron("30 2 * * 0"),  # weekly Sunday 02:30 UTC (after daily feature)
+    timeout=1800,
+)
+def run_backfill() -> dict:
+    """Self-healing: backfill features for any raw days missing them."""
+    _set_env_defaults()
+    _syspath(FEATURE_ROOT)
+
+    from src.pipeline.backfill import backfill
+
+    results = backfill()
+    return {"component": "backfill", "status": "ok", "days_processed": len(results)}
+
+
 # ---------------------------------------------------------------------------
 # 2. Daily report (daily) — builds PDF from features, uploads to S3
 # ---------------------------------------------------------------------------
