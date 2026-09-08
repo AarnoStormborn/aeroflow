@@ -244,8 +244,11 @@ def run_report(target_date: str | None = None) -> dict:
     timeout=3600,
 )
 def run_training(end_date: str | None = None) -> dict:
-    """Model training (every 3 days at 2 AM UTC). Trains on rolling window
-    ending yesterday by default. Logs to MLflow (web_server on Modal).
+    """Retrain production hourly model (every 3 days at 2 AM UTC).
+
+    Trains the tuned XGBoost on the freshest feature block and registers
+    a new Production version of flight-traffic-hourly. Skips (gracefully)
+    if insufficient fresh data is available.
 
     Args:
         end_date: YYYY-MM-DD last day of the training window (default yesterday).
@@ -253,17 +256,13 @@ def run_training(end_date: str | None = None) -> dict:
     _set_env_defaults()
     _syspath(TRAINING_ROOT)
 
-    from datetime import date, timedelta
+    from datetime import date
 
-    from src.training.train import train_model
+    from src.training.train_production import train_production
 
-    if end_date:
-        d = date.fromisoformat(end_date)
-    else:
-        d = date.today() - timedelta(days=1)
-
-    result = train_model(d)
-    return {"component": "training", "status": "ok", "end_date": str(d), **result}
+    d = date.fromisoformat(end_date) if end_date else None
+    result = train_production(d)
+    return {"component": "training", "status": result.get("status", "?")}
 
 
 # ---------------------------------------------------------------------------
