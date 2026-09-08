@@ -114,6 +114,8 @@ forecast_image = (
         "anyio>=4.0.0",
         "matplotlib>=3.8.0",
         "httpx>=0.27.0",
+        "fastapi",
+        "uvicorn",
     )
     .add_local_dir("./forecasting", "/root/forecast", copy=True, ignore=_ignore)
 )
@@ -194,25 +196,17 @@ def run_feature(target_date: str | None = None) -> dict:
         d = date.today() - timedelta(days=1)
 
     s3_url = run_feature_pipeline(d)
-    return {"component": "feature", "status": "ok", "date": str(d), "s3_url": s3_url}
+    # Self-healing: also fill any raw days that lack features (missed runs)
+    backfilled = 0
+    try:
+        from src.pipeline.backfill import backfill
 
-
-@app.function(
-    image=feature_image,
-    secrets=[secrets],
-    volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("30 2 * * 0"),  # weekly Sunday 02:30 UTC (after daily feature)
-    timeout=1800,
-)
-def run_backfill() -> dict:
-    """Self-healing: backfill features for any raw days missing them."""
-    _set_env_defaults()
-    _syspath(FEATURE_ROOT)
-
-    from src.pipeline.backfill import backfill
-
-    results = backfill()
-    return {"component": "backfill", "status": "ok", "days_processed": len(results)}
+        results = backfill()
+        backfilled = len(results)
+    except Exception as e:
+        print(f"Backfill failed: {e}")
+    return {"component": "feature", "status": "ok", "date": str(d),
+            "s3_url": s3_url, "backfilled": backfilled}
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +298,22 @@ def run_forecast() -> dict:
 
     result = _rf()
     return {"component": "forecast", "status": "ok", "generated_at": result["generated_at"]}
+
+
+@app.function(
+    image=forecast_image,
+    secrets=[secrets],
+    volumes={VOLUME_MOUNT: volume},
+)
+@modal.asgi_app()
+def forecast_api():
+    """On-demand forecasting API (GET /forecast, /health, /models)."""
+    _set_env_defaults()
+    _syspath(FORECAST_ROOT)
+
+    from src.forecasting.api import app as fastapi_app
+
+    return fastapi_app
 
 
 @app.function(
