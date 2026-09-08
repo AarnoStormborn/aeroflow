@@ -11,6 +11,7 @@ members = [
     "feature-engineering",
     "model-training",
     "forecasting",
+    "dashboard",
 ]
 
 [dependency-groups]

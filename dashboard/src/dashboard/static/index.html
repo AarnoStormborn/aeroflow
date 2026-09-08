@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aeroflow Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">✈</span>
+      <div>
+        <h1>Aeroflow Dashboard</h1>
+        <span class="sub">Mumbai airspace · live traffic &amp; forecasting</span>
+      </div>
+    </div>
+    <div class="status-pill" id="status-pill" title="Data freshness">…</div>
+  </header>
+
+  <!-- Live strip -->
+  <section class="cards" id="live-cards">
+    <div class="card stat">
+      <div class="label">Active aircraft now</div>
+      <div class="value big" id="active-now">–</div>
+    </div>
+    <div class="card stat">
+      <div class="label">Today's hourly peak</div>
+      <div class="value" id="today-peak">–</div>
+    </div>
+    <div class="card stat">
+      <div class="label">Raw files today</div>
+      <div class="value" id="raw-today">–</div>
+    </div>
+    <div class="card stat">
+      <div class="label">Data freshness</div>
+      <div class="value" id="freshness">–</div>
+    </div>
+  </section>
+
+  <!-- Today vs yesterday -->
+  <section class="panel">
+    <h2>Today vs Yesterday (hourly flight count)</h2>
+    <div class="chart-wrap"><canvas id="liveChart"></canvas></div>
+  </section>
+
+  <!-- Patterns -->
+  <section class="grid-2">
+    <div class="panel">
+      <h2>Hour-of-day profile (14-day mean)</h2>
+      <div class="chart-wrap"><canvas id="hourChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Average daily traffic by weekday</h2>
+      <div class="chart-wrap"><canvas id="weekdayChart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Anomalies -->
+  <section class="panel" id="anomalies-panel" style="display:none">
+    <h2>⚠️ Regime / anomaly flags (last 3 days vs prior week)</h2>
+    <div id="anomalies-body"></div>
+  </section>
+
+  <!-- Forecasts -->
+  <section class="grid-2">
+    <div class="panel">
+      <h2>Forecast accuracy — actual vs predicted (h=1)</h2>
+      <div class="chart-wrap tall"><canvas id="fcChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Latest forecast (next 6h)</h2>
+      <div id="latest-fc" class="info-body">…</div>
+    </div>
+  </section>
+
+  <!-- Health + coverage -->
+  <section class="panel">
+    <h2>System health &amp; data coverage (last 10 days)</h2>
+    <div id="health-body"></div>
+  </section>
+
+  <!-- Reports -->
+  <section class="panel">
+    <h2>Daily PDF reports</h2>
+    <div id="reports-body"></div>
+  </section>
+
+  <footer>Auto-refresh every 60s · generated at <span id="gen-at">–</span> UTC</footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

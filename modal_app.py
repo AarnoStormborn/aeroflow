@@ -120,6 +120,22 @@ forecast_image = (
     .add_local_dir("./forecasting", "/root/forecast", copy=True, ignore=_ignore)
 )
 
+# Dashboard image (FastAPI + static assets)
+dashboard_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "polars>=1.0.0",
+        "boto3>=1.34.0",
+        "python-dotenv",
+        "loguru>=0.7.0",
+        "pydantic>=2.0.0",
+        "pydantic-settings>=2.0.0",
+        "fastapi",
+        "uvicorn",
+    )
+    .add_local_dir("./dashboard", "/root/dashboard", copy=True, ignore=_ignore)
+)
+
 secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
     "OPENSKY_CLIENT_ID",
     "OPENSKY_CLIENT_SECRET",
@@ -135,6 +151,7 @@ VOLUME_MOUNT = "/data"
 FEATURE_ROOT = "/root/feature"
 TRAINING_ROOT = "/root/training"
 FORECAST_ROOT = "/root/forecast"
+DASHBOARD_ROOT = "/root/dashboard"
 
 
 def _set_env_defaults() -> None:
@@ -298,6 +315,25 @@ def run_forecast() -> dict:
 
     result = _rf()
     return {"component": "forecast", "status": "ok", "generated_at": result["generated_at"]}
+
+
+@app.function(
+    image=dashboard_image,
+    secrets=[secrets],
+)
+@modal.asgi_app()
+def dashboard_app():
+    """Live traffic + forecasting dashboard (web).
+
+    NOTE: public by design. Does NOT expose the MLflow tracking UI URL —
+    the MLflow URI is used server-side only.
+    """
+    _set_env_defaults()
+    _syspath(DASHBOARD_ROOT)
+
+    from src.dashboard.app import app as dash_app
+
+    return dash_app
 
 
 @app.function(
