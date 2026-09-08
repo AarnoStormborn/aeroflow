@@ -165,6 +165,15 @@ def main():
     png = render_graph(agg)
     send_discord_report(agg, png, len(evals))
 
+    # Auto-promote the champion model if enough comparisons accumulated
+    from src.forecasting.models.champion import run_autopromote
+
+    promo = run_autopromote(evals)
+    print("Autopromote:", promo)
+    if promo.get("autopromoted"):
+        print(f"🏆 Champion: {promo['champion']} v{promo.get('version')} "
+              f"(h=1 MAPE {promo.get('h1_mape', 0):.2f}%)")
+
 
 if __name__ == "__main__":
     main()
