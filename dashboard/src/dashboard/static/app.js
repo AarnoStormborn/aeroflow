@@ -15,7 +15,9 @@ function fmtStamp(iso) {
 }
 
 function makeChart(id, cfg) {
-  const ctx = document.getElementById(id).getContext("2d");
+  const el = document.getElementById(id);
+  if (!el || typeof Chart === "undefined") return null;
+  const ctx = el.getContext("2d");
   if (window[id]) window[id].destroy();
   const c = new Chart(ctx, cfg);
   window[id] = c;
@@ -292,10 +294,29 @@ function countUp(id, target) {
 
 /* ---------------- loop ---------------- */
 
+// Chart.js loads from CDN; wait until it is available before first paint
+// so the initial refresh doesn't race the network and blank the dashboard.
+function whenChartLib(timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    if (typeof Chart !== "undefined") return resolve(true);
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (typeof Chart !== "undefined") { clearInterval(iv); resolve(true); }
+      else if (Date.now() - t0 > timeoutMs) { clearInterval(iv); resolve(false); }
+    }, 150);
+  });
+}
+
 async function refresh() {
   try {
-    await Promise.all([loadLive(), loadPatterns(), loadForecasts(), loadHealth()]);
-    document.getElementById("foot-updated").textContent = "updated " + fmtClock(new Date().toISOString());
+    await whenChartLib();
+    // run each loader independently so a single failure doesn't blank all
+    const results = await Promise.allSettled([
+      loadLive(), loadPatterns(), loadForecasts(), loadHealth(),
+    ]);
+    for (const r of results) if (r.status === "rejected") console.error(r.reason);
+    document.getElementById("foot-updated").textContent =
+      "updated " + fmtClock(new Date().toISOString());
   } catch (e) {
     console.error(e);
     const pill = document.getElementById("status-pill");
