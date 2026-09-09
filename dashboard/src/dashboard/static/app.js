@@ -75,8 +75,8 @@ async function loadLive() {
   const todayVals = today.map(r => r.count);
   const yestVals = today.map(r => yestMap[r.hour] ?? null);
 
-  const g = ctx => {
-    const grad = ctx.createLinearGradient(0, 0, 0, 280);
+  const g = context => {
+    const grad = context.chart.ctx.createLinearGradient(0, 0, 0, 280);
     grad.addColorStop(0, "rgba(91,140,255,.35)");
     grad.addColorStop(1, "rgba(91,140,255,0)");
     return grad;
