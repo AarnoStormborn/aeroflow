@@ -45,7 +45,7 @@ BACKUP_PREFIX = os.environ.get("BACKUP_PREFIX", "backups/ingestion")
 def s3_client():
     return boto3.client(
         "s3",
-        region_name=os.environ.get("AWS_REGION", "us-east-1"),
+        region_name=os.environ.get("AWS_REGION", "ap-south-1"),
         aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
         aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
     )

@@ -13,7 +13,7 @@ class S3Settings(BaseSettings):
     """S3 configuration for reading feature data."""
 
     bucket_name: str = Field(default="flights-forecasting")
-    region: str = Field(default="us-east-1")
+    region: str = Field(default="ap-south-1")
     access_key_id: str | None = Field(default=None, validation_alias="AWS_ACCESS_KEY_ID")
     secret_access_key: str | None = Field(default=None, validation_alias="AWS_SECRET_ACCESS_KEY")
 

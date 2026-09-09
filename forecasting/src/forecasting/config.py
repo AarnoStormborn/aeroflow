@@ -17,7 +17,7 @@ class S3Settings(BaseSettings):
     raw_prefix: str = Field(default="raw/flights/states")
     # Where forecasts get written
     forecast_prefix: str = Field(default="forecasts/hourly")
-    region: str = Field(default="us-east-1")
+    region: str = Field(default="ap-south-1")
     access_key_id: str | None = Field(default=None, validation_alias="AWS_ACCESS_KEY_ID")
     secret_access_key: str | None = Field(default=None, validation_alias="AWS_SECRET_ACCESS_KEY")
 
