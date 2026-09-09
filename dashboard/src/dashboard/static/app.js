@@ -23,7 +23,11 @@ function makeChart(id, cfg) {
   const el = document.getElementById(id);
   if (!el || typeof Chart === "undefined") return null;
   const ctx = el.getContext("2d");
-  if (charts[id]) charts[id].destroy();
+  // Chart.js keeps its own registry. Use it as the source of truth because
+  // overlapping refreshes can outlive an entry in our local map.
+  const existing = Chart.getChart(el);
+  if (existing) existing.destroy();
+  charts[id] = null;
   const c = new Chart(ctx, cfg);
   charts[id] = c;
   return c;
@@ -312,7 +316,11 @@ function whenChartLib(timeoutMs = 15000) {
   });
 }
 
+let refreshInFlight = false;
+
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     await whenChartLib();
     // run each loader independently so a single failure doesn't blank all
@@ -326,6 +334,8 @@ async function refresh() {
     console.error(e);
     const pill = document.getElementById("status-pill");
     pill.textContent = "load error"; pill.className = "status-pill bad";
+  } finally {
+    refreshInFlight = false;
   }
 }
 
