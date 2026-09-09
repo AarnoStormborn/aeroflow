@@ -14,13 +14,18 @@ function fmtStamp(iso) {
   return iso.replace("T", " ").slice(0, 16);
 }
 
+// Keep Chart.js instances separate from DOM globals. Browsers expose an
+// element with id="liveChart" as window.liveChart, so using window[id] here
+// would find the canvas and call canvas.destroy(), which does not exist.
+const charts = Object.create(null);
+
 function makeChart(id, cfg) {
   const el = document.getElementById(id);
   if (!el || typeof Chart === "undefined") return null;
   const ctx = el.getContext("2d");
-  if (window[id]) window[id].destroy();
+  if (charts[id]) charts[id].destroy();
   const c = new Chart(ctx, cfg);
-  window[id] = c;
+  charts[id] = c;
   return c;
 }
 
@@ -35,7 +40,7 @@ function baseScales(yTitle) {
 
 async function loadLive() {
   const d = await (await fetch("/api/live")).json();
-  document.getElementById("live-sub").textContent = `as of ${fmtClock(d.now_utc)} UTC`;
+  document.getElementById("live-sub").textContent = `as of ${fmtClock(d.now_utc)}`;
   document.getElementById("clock").textContent = fmtClock(d.now_utc);
 
   const today = d.today || [];
