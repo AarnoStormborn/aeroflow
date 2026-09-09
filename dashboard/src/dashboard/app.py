@@ -20,7 +20,18 @@ _STATIC = Path(__file__).parent / "static"
 
 @app.get("/")
 def index():
-    return FileResponse(_STATIC / "index.html")
+    resp = FileResponse(_STATIC / "index.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+
+# Serve static assets without long-lived caching so redeploys are picked up
+# quickly (cache-bust via ?v= handles the actual freshness).
+app.mount(
+    "/static",
+    StaticFiles(directory=str(_STATIC)),
+    name="static",
+)
 
 
 @app.get("/api/live")
@@ -41,6 +52,3 @@ def api_forecasts():
 @app.get("/api/health")
 def api_health():
     return data_layer.health_snapshot()
-
-
-app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
