@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aeroflow · Mumbai Airspace</title>
-  <script src="/static/chart.umd.min.js?v=3"></script>
+  <script src="/static/chart.umd.min.js?v=4"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -28,10 +28,10 @@
 
   <!-- Hero KPI strip -->
   <section class="kpi-strip" id="kpi-strip">
-    <div class="kpi" id="kpi-active">
+    <div class="kpi">
       <div class="kpi-label">Aircraft now</div>
-      <div class="kpi-value" data-count>0</div>
-      <div class="kpi-trend" id="active-trend">in airspace</div>
+      <div class="kpi-value" id="kpi-active" data-count>0</div>
+      <div class="kpi-trend">in airspace</div>
     </div>
     <div class="kpi">
       <div class="kpi-label">Today's peak</div>
@@ -133,6 +133,6 @@
     <span>auto-refresh 60s</span>
   </footer>
 
-  <script src="/static/app.js?v=3"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>
