@@ -1,44 +1,110 @@
-/* Aeroflow dashboard client: fetches JSON API and renders charts. */
+/* Aeroflow dashboard client — charts, doughnuts, KPIs. */
 
-const COLORS = {
-  blue: "#58a6ff", green: "#3fb950", red: "#f85149",
-  amber: "#d29922", purple: "#bc8cff", gray: "#8b949e",
-};
+const PALETTE = ["#5b8cff", "#8f6bff", "#34d399", "#f472b6", "#fbbf24",
+                 "#22d3ee", "#f87171", "#a78bfa", "#4ade80", "#fb923c"];
+const GRAY = "#64748b";
 
-function fmtTime(iso) {
+function fmtClock(iso) {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  return d.toUTCString().slice(17, 25) + " UTC";
+}
+function fmtStamp(iso) {
   if (!iso) return "–";
   return iso.replace("T", " ").slice(0, 16);
 }
 
-/* ---------------- live strip ---------------- */
+function makeChart(id, cfg) {
+  const ctx = document.getElementById(id).getContext("2d");
+  if (window[id]) window[id].destroy();
+  const c = new Chart(ctx, cfg);
+  window[id] = c;
+  return c;
+}
+
+function baseScales(yTitle) {
+  return {
+    x: { ticks: { color: GRAY, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: "rgba(255,255,255,.04)" } },
+    y: { ticks: { color: GRAY }, grid: { color: "rgba(255,255,255,.05)" }, title: { display: !!yTitle, text: yTitle, color: GRAY } },
+  };
+}
+
+/* ---------------- KPI + live chart ---------------- */
 
 async function loadLive() {
   const d = await (await fetch("/api/live")).json();
-  document.getElementById("gen-at").textContent = fmtTime(d.now_utc);
-  document.getElementById("active-now").textContent = d.active_aircraft_now;
+  document.getElementById("live-sub").textContent = `as of ${fmtClock(d.now_utc)} UTC`;
+  document.getElementById("clock").textContent = fmtClock(d.now_utc);
 
   const today = d.today || [];
-  const peak = today.reduce((m, r) => Math.max(m, r.count), 0);
-  document.getElementById("today-peak").textContent = peak ? Math.round(peak) : "–";
-
-  const labels = today.map(r => `${r.hour}:00`);
-  const todayVals = today.map(r => r.count);
   const yest = d.yesterday || [];
+  const peak = today.reduce((m, r) => Math.max(m, r.count), 0);
+  const avgToday = today.length ? today.reduce((s, r) => s + r.count, 0) / today.length : 0;
+
+  countUp("kpi-active", d.active_aircraft_now);
+  countUp("today-peak", Math.round(peak));
+  countUp("today-avg", Math.round(avgToday));
+
+  // vs yesterday (compare same elapsed hours)
   const yestMap = Object.fromEntries(yest.map(r => [r.hour, r.count]));
+  const pairs = today.filter(r => r.hour in yestMap && yestMap[r.hour] > 0);
+  const pct = pairs.length
+    ? (today.filter(r => r.hour in yestMap).reduce((s, r) => s + r.count, 0)
+       - pairs.reduce((s, r) => s + yestMap[r.hour], 0))
+      / pairs.reduce((s, r) => s + yestMap[r.hour], 0) * 100
+    : 0;
+  const el = document.getElementById("vs-yesterday");
+  el.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%";
+  el.style.color = Math.abs(pct) > 25 ? (pct < 0 ? "var(--red)" : "var(--amber)") : "var(--green)";
+  document.getElementById("vs-yesterday-label").textContent =
+    Math.abs(pct) > 25 ? (pct < 0 ? "⚠ down" : "⚠ up") : "steady";
+
+  // gradient area: today vs yesterday
+  const labels = today.map(r => `${String(r.hour).padStart(2, "0")}:00`);
+  const todayVals = today.map(r => r.count);
   const yestVals = today.map(r => yestMap[r.hour] ?? null);
 
-  const ctx = document.getElementById("liveChart").getContext("2d");
-  if (window.liveChart) window.liveChart.destroy();
-  window.liveChart = new Chart(ctx, {
+  const g = ctx => {
+    const grad = ctx.createLinearGradient(0, 0, 0, 280);
+    grad.addColorStop(0, "rgba(91,140,255,.35)");
+    grad.addColorStop(1, "rgba(91,140,255,0)");
+    return grad;
+  };
+  makeChart("liveChart", {
     type: "line",
-    data: {
-      labels,
-      datasets: [
-        { label: "Today", data: todayVals, borderColor: COLORS.blue, backgroundColor: "rgba(88,166,255,.12)", fill: true, tension: .3, pointRadius: 0 },
-        { label: "Yesterday", data: yestVals, borderColor: COLORS.gray, borderDash: [5,4], tension: .3, pointRadius: 0 },
-      ],
-    },
-    options: chartOpts("Flight count"),
+    data: { labels, datasets: [
+      { label: "Today", data: todayVals, borderColor: "#5b8cff", backgroundColor: g, fill: true, tension: .4, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Yesterday", data: yestVals, borderColor: GRAY, borderDash: [5, 5], fill: false, tension: .4, pointRadius: 0, borderWidth: 1.5 },
+    ]},
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: GRAY, boxWidth: 10, usePointStyle: true } } },
+      scales: baseScales("aircraft / hour") },
+  });
+
+  // breakdowns
+  renderBreakdown(d.breakdown);
+}
+
+function renderBreakdown(b) {
+  if (!b) return;
+  doughnut("countryChart", "country-total", b.countries.map(c => c.label),
+           b.countries.map(c => c.n), "aircraft");
+  doughnut("airlineChart", "airline-total", b.airlines.map(c => c.label),
+           b.airlines.map(c => c.n), "ac");
+  doughnut("altChart", "alt-total", b.altitudes.map(c => c.label),
+           b.altitudes.map(c => c.n), "ac");
+}
+
+function doughnut(id, centerId, labels, values, unit) {
+  const center = document.getElementById(centerId);
+  const total = values.reduce((a, b) => a + b, 0);
+  if (center) center.innerHTML = `<div>${total}</div><div style="font-size:11px">${unit}</div>`;
+  makeChart(id, {
+    type: "doughnut",
+    data: { labels, datasets: [{ data: values, backgroundColor: PALETTE.slice(0, labels.length),
+      borderWidth: 0, hoverOffset: 6 }] },
+    options: { responsive: true, maintainAspectRatio: false, cutout: "68%",
+      plugins: { legend: { position: "bottom", labels: { color: GRAY, boxWidth: 8, font: { size: 10 } } } } },
   });
 }
 
@@ -47,48 +113,81 @@ async function loadLive() {
 async function loadPatterns() {
   const d = await (await fetch("/api/patterns")).json();
 
-  // hour profile
-  const hp = d.hour_profile || [];
-  const hctx = document.getElementById("hourChart").getContext("2d");
-  if (window.hourChart) window.hourChart.destroy();
-  window.hourChart = new Chart(hctx, {
-    type: "bar",
-    data: {
-      labels: hp.map(r => `${r.hour}`),
-      datasets: [{ label: "avg flights", data: hp.map(r => r.mean), backgroundColor: COLORS.green, borderRadius: 3 }],
-    },
-    options: chartOpts("avg count"),
+  // 7-day overlay
+  const overlay = d.overlay || [];
+  const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, "0")}:00`);
+  const datasets = overlay.map((day, i) => {
+    const m = Object.fromEntries(day.hours.map(h => [h.hour, h.count]));
+    return {
+      label: day.date.slice(5) + " " + day.weekday,
+      data: labels.map((_, h) => m[h] ?? null),
+      borderColor: PALETTE[i % PALETTE.length],
+      borderWidth: i === overlay.length - 1 ? 3 : 1.5,
+      backgroundColor: i === overlay.length - 1 ? "rgba(91,140,255,.08)" : "transparent",
+      fill: i === overlay.length - 1,
+      pointRadius: 0, tension: .35,
+    };
+  });
+  makeChart("weekChart", {
+    type: "line",
+    data: { labels, datasets },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+      scales: baseScales("aircraft") },
   });
 
-  // weekday
+  // day-part doughnut
+  const parts = d.day_parts || [];
+  doughnut("daypartChart", null, parts.map(p => p.part), parts.map(p => p.total), "");
+
+  // weekday bars (rounded, gradient)
   const wp = d.weekday_profile || [];
-  const wctx = document.getElementById("weekdayChart").getContext("2d");
-  if (window.weekdayChart) window.weekdayChart.destroy();
-  window.weekdayChart = new Chart(wctx, {
+  const todayIdx = new Date().getUTCDay(); // 0=Sun
+  const wkOrder = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const sorted = wkOrder.map((n, i) => {
+    const f = wp.find(w => w.weekday === n);
+    return { ...(f || { weekday: n, mean_total: 0 }), today: (i === (todayIdx + 6) % 7) };
+  }).filter(x => x.mean_total > 0);
+  makeChart("weekdayChart", {
     type: "bar",
-    data: {
-      labels: wp.map(r => r.weekday),
-      datasets: [{ label: "mean daily total", data: wp.map(r => r.mean_total), backgroundColor: COLORS.purple, borderRadius: 3 }],
-    },
-    options: chartOpts("total flights/day"),
+    data: { labels: sorted.map(s => s.weekday + (s.today ? " •" : "")),
+      datasets: [{ data: sorted.map(s => s.mean_total),
+        backgroundColor: sorted.map(s => s.today ? "#8f6bff" : "rgba(91,140,255,.55)"),
+        borderRadius: 6, borderSkipped: false }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } }, scales: baseScales("flights/day") },
+  });
+
+  // hour profile (bar with highlight for current hour)
+  const hp = d.hour_profile || [];
+  const nowH = new Date().getUTCHours();
+  makeChart("hourChart", {
+    type: "bar",
+    data: { labels: hp.map(r => r.hour),
+      datasets: [{ data: hp.map(r => r.mean),
+        backgroundColor: hp.map(r => r.hour === nowH ? "rgba(52,211,153,.9)" : "rgba(143,107,255,.45)"),
+        borderRadius: 4, borderSkipped: false }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } }, scales: baseScales("avg aircraft") },
   });
 
   // anomalies
-  const anomalies = d.anomalies || [];
+  renderAnomalies(d.anomalies || []);
+}
+
+function renderAnomalies(anomalies) {
   const panel = document.getElementById("anomalies-panel");
-  const body = document.getElementById("anomalies-body");
-  if (anomalies.length) {
-    panel.style.display = "";
-    body.innerHTML = anomalies.map(a =>
-      `<div class="anomaly">
-        <span class="tag">${a.date}</span>
-        <span>mean <b>${a.mean}</b> vs trailing <b>${a.trail_mean}</b></span>
-        <span style="color:${a.deviation_pct < 0 ? COLORS.red : COLORS.amber}">
-          (${a.deviation_pct > 0 ? "+" : ""}${a.deviation_pct}%)</span>
-      </div>`).join("");
-  } else {
-    panel.style.display = "none";
-  }
+  if (!anomalies.length) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+  document.getElementById("anomalies-body").innerHTML = anomalies.map(a => {
+    const up = a.deviation_pct > 0;
+    return `<div class="anomaly ${up ? "up" : ""}">
+      <span class="date">${a.date}</span>
+      <span class="detail">avg <b>${a.mean}</b> flights vs trailing-week <b>${a.trail_mean}</b></span>
+      <span class="pct" style="color:${up ? "var(--amber)" : "var(--red)"}">
+        ${up ? "▲" : "▼"} ${Math.abs(a.deviation_pct).toFixed(1)}%</span>
+    </div>`;
+  }).join("");
 }
 
 /* ---------------- forecasts ---------------- */
@@ -96,52 +195,57 @@ async function loadPatterns() {
 async function loadForecasts() {
   const d = await (await fetch("/api/forecasts")).json();
 
+  // h=1 actual vs predicted
   const names = Object.keys(d.h1_history || {});
   const series = {};
-  for (const n of names) {
-    series[n] = d.h1_history[n].slice(-48);
-  }
+  for (const n of names) series[n] = d.h1_history[n].slice(-60);
   const sample = names.length ? series[names[0]] : [];
-  const labels = sample.map(p => p.target.slice(5));
-
-  const ctx = document.getElementById("fcChart").getContext("2d");
-  if (window.fcChart) window.fcChart.destroy();
+  const labels = sample.map(p => p.target.slice(5, 16));
   const datasets = [];
-  const modelColors = [COLORS.blue, COLORS.green, COLORS.purple, COLORS.amber];
   names.forEach((n, i) => {
-    const short = n.replace("flight-traffic-", "");
     datasets.push({
-      label: `pred: ${short}`,
+      label: "pred · " + n.replace("flight-traffic-", ""),
       data: series[n].map(p => p.pred),
-      borderColor: modelColors[i % modelColors.length],
-      tension: .25, pointRadius: 0,
+      borderColor: PALETTE[i % PALETTE.length], tension: .25, pointRadius: 0, borderWidth: 2,
     });
   });
-  // actuals (from whichever series has them)
   datasets.push({
-    label: "actual",
-    data: sample.map(p => p.actual ?? null),
-    borderColor: COLORS.red, borderDash: [6,4], tension: .3, pointRadius: 2,
+    label: "actual", data: sample.map(p => p.actual ?? null),
+    borderColor: "#f87171", borderDash: [6, 4], pointRadius: 2, tension: .3,
   });
-  if (window.fcChart) window.fcChart.destroy();
-  window.fcChart = new Chart(ctx, {
-    type: "line",
-    data: { labels, datasets },
-    options: chartOpts("flight count"),
-  });
-
-  // latest forecast block
-  const latest = document.getElementById("latest-fc");
-  if (d.latest_generated) {
-    let html = `<div class="mono">generated: ${fmtTime(d.latest_generated)} UTC</div><br>`;
-    for (const [name, val] of Object.entries(d.latest_models || {})) {
-      html += `<div><span style="color:${COLORS.blue}">●</span> <b>${name.replace("flight-traffic-", "")}</b> next-hour: <span class="mono">${val}</span></div>`;
-    }
-    html += `<div style="color:var(--muted);margin-top:8px">${d.num_forecasts} forecasts stored · comparison via daily eval</div>`;
-    latest.innerHTML = html;
-  } else {
-    latest.innerHTML = "No forecasts yet.";
+  if (datasets.length) {
+    makeChart("fcChart", {
+      type: "line",
+      data: { labels, datasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+        scales: baseScales("aircraft") },
+    });
   }
+
+  // latest outlook: stacked lines for each model over next 6h
+  const lm = d.latest_models || {};
+  const hours = Object.values(lm)[0]?.hours || [];
+  const oLabels = hours;
+  const oDatasets = Object.entries(lm).map(([n, m], i) => ({
+    label: n.replace("flight-traffic-", ""),
+    data: m.series, borderColor: PALETTE[i % PALETTE.length],
+    tension: .3, pointRadius: 3, borderWidth: 2.5,
+    backgroundColor: "rgba(91,140,255,.05)", fill: i === 0,
+  }));
+  if (oDatasets.length) {
+    makeChart("outlookChart", {
+      type: "line",
+      data: { labels: oLabels, datasets: oDatasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+        scales: baseScales("predicted aircraft") },
+    });
+  }
+  const meta = document.getElementById("outlook-meta");
+  meta.innerHTML = d.latest_generated
+    ? `generated <span class="mono">${fmtStamp(d.latest_generated)} UTC</span> · ${d.num_forecasts} forecasts stored`
+    : "no forecasts yet";
 }
 
 /* ---------------- health ---------------- */
@@ -150,81 +254,52 @@ async function loadHealth() {
   const d = await (await fetch("/api/health")).json();
   const pill = document.getElementById("status-pill");
   const fresh = d.data_freshness_min;
-  if (fresh === null) {
-    pill.textContent = "no data today";
-    pill.className = "status-pill bad";
-  } else if (fresh <= 30) {
-    pill.textContent = `● live (${fresh} min ago)`;
-    pill.className = "status-pill ok";
-  } else if (fresh <= 120) {
-    pill.textContent = `stale (${fresh} min)`;
-    pill.className = "status-pill warn";
-  } else {
-    pill.textContent = `● down? (${fresh} min)`;
-    pill.className = "status-pill bad";
-  }
+  if (fresh === null) { pill.textContent = "no data today"; pill.className = "status-pill bad"; }
+  else if (fresh <= 30) { pill.textContent = "● live · " + fresh + "m"; pill.className = "status-pill ok"; }
+  else if (fresh <= 120) { pill.textContent = "stale · " + fresh + "m"; pill.className = "status-pill warn"; }
+  else { pill.textContent = "● down? · " + fresh + "m"; pill.className = "status-pill bad"; }
 
-  document.getElementById("raw-today").textContent = d.raw_files_today ?? "–";
-  document.getElementById("freshness").textContent =
-    fresh === null ? "–" : `${fresh} min`;
-
-  const cov = d.coverage || [];
-  const rows = cov.slice().reverse().map(r => {
-    return `<tr>
-      <td>${r.date}</td>
-      <td>${r.raw ? '<span class="dot yes"></span>' : '<span class="dot no"></span>'}</td>
-      <td>${r.features ? '<span class="dot yes"></span>' : '<span class="dot no"></span>'}</td>
-    </tr>`;
-  }).join("");
+  const cov = (d.coverage || []).slice().reverse();
   document.getElementById("health-body").innerHTML = `
-    <div class="info-body">
-      <span>feature days: <b>${d.feature_days}</b> &nbsp;·&nbsp;
-      forecasts stored: <b>${d.forecast_count}</b></span>
-      <div style="height:10px"></div>
+    <div class="hgrid">
+      <div class="hitem"><div class="hv">${d.data_freshness_min ?? "–"}m</div><div class="hl">data age</div></div>
+      <div class="hitem"><div class="hv">${d.raw_files_today ?? 0}</div><div class="hl">raw files today</div></div>
+      <div class="hitem"><div class="hv">${d.feature_days ?? 0}</div><div class="hl">feature days</div></div>
+      <div class="hitem"><div class="hv">${d.forecast_count ?? 0}</div><div class="hl">forecasts stored</div></div>
     </div>
     <table class="coverage">
-      <tr><th>date</th><th>raw</th><th>features</th></tr>
-      ${rows}
+      <tr><th>date</th><th>raw data</th><th>features</th></tr>
+      ${cov.map(r => `<tr><td>${r.date}</td>
+        <td>${r.raw ? '<span class="dot yes"></span>' : '<span class="dot no"></span>'}</td>
+        <td>${r.features ? '<span class="dot yes"></span>' : '<span class="dot no"></span>'}</td></tr>`).join("")}
     </table>`;
-}
-
-/* ---------------- reports ---------------- */
-
-async function loadReports() {
-  const d = await (await fetch("/api/reports")).json();
-  const body = document.getElementById("reports-body");
-  if (!d.reports || !d.reports.length) {
-    body.innerHTML = '<span class="info-body">No reports yet.</span>';
-    return;
-  }
-  body.innerHTML = d.reports.map(r => {
-    const url = `/api/reports/file?key=${encodeURIComponent(r.key)}`;
-    return `<a href="${url}" target="_blank">📄 ${r.date}</a>`;
-  }).join("");
 }
 
 /* ---------------- helpers ---------------- */
 
-function chartOpts(ylabel) {
-  return {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { labels: { color: "#8b949e", boxWidth: 12 } } },
-    scales: {
-      x: { ticks: { color: "#8b949e", maxRotation: 45 }, grid: { color: "#21262d" } },
-      y: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" }, title: { display: true, text: ylabel, color: "#8b949e" } },
-    },
-  };
+function countUp(id, target) {
+  const el = document.getElementById(id);
+  const start = parseInt(el.textContent) || 0;
+  if (target === start) return;
+  const dur = 600, t0 = performance.now();
+  function tick(t) {
+    const p = Math.min((t - t0) / dur, 1);
+    el.textContent = Math.round(start + (target - start) * (1 - Math.pow(1 - p, 3)));
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
 }
 
 /* ---------------- loop ---------------- */
 
 async function refresh() {
   try {
-    await Promise.all([loadLive(), loadPatterns(), loadForecasts(), loadHealth(), loadReports()]);
+    await Promise.all([loadLive(), loadPatterns(), loadForecasts(), loadHealth()]);
+    document.getElementById("foot-updated").textContent = "updated " + fmtClock(new Date().toISOString());
   } catch (e) {
+    console.error(e);
     const pill = document.getElementById("status-pill");
-    pill.textContent = "load error";
-    pill.className = "status-pill bad";
+    pill.textContent = "load error"; pill.className = "status-pill bad";
   }
 }
 

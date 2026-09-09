@@ -3,91 +3,135 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Aeroflow Dashboard</title>
+  <title>Aeroflow · Mumbai Airspace</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <div class="bg-glow"></div>
+
   <header>
     <div class="brand">
-      <span class="logo">✈</span>
+      <div class="logo">✈</div>
       <div>
-        <h1>Aeroflow Dashboard</h1>
-        <span class="sub">Mumbai airspace · live traffic &amp; forecasting</span>
+        <h1>Aeroflow</h1>
+        <span class="sub">Mumbai Airspace · Live Traffic Intelligence</span>
       </div>
     </div>
-    <div class="status-pill" id="status-pill" title="Data freshness">…</div>
+    <div class="header-right">
+      <div class="status-pill" id="status-pill">…</div>
+      <div class="clock mono" id="clock">–</div>
+    </div>
   </header>
 
-  <!-- Live strip -->
-  <section class="cards" id="live-cards">
-    <div class="card stat">
-      <div class="label">Active aircraft now</div>
-      <div class="value big" id="active-now">–</div>
+  <!-- Hero KPI strip -->
+  <section class="kpi-strip" id="kpi-strip">
+    <div class="kpi" id="kpi-active">
+      <div class="kpi-label">Aircraft now</div>
+      <div class="kpi-value" data-count>0</div>
+      <div class="kpi-trend" id="active-trend">in airspace</div>
     </div>
-    <div class="card stat">
-      <div class="label">Today's hourly peak</div>
-      <div class="value" id="today-peak">–</div>
+    <div class="kpi">
+      <div class="kpi-label">Today's peak</div>
+      <div class="kpi-value" data-count id="today-peak">0</div>
+      <div class="kpi-trend">hourly flights</div>
     </div>
-    <div class="card stat">
-      <div class="label">Raw files today</div>
-      <div class="value" id="raw-today">–</div>
+    <div class="kpi">
+      <div class="kpi-label">Avg today</div>
+      <div class="kpi-value" data-count id="today-avg">0</div>
+      <div class="kpi-trend">per hour</div>
     </div>
-    <div class="card stat">
-      <div class="label">Data freshness</div>
-      <div class="value" id="freshness">–</div>
+    <div class="kpi">
+      <div class="kpi-label">Hourly vs yesterday</div>
+      <div class="kpi-value" id="vs-yesterday">0%</div>
+      <div class="kpi-trend" id="vs-yesterday-label">steady</div>
     </div>
   </section>
 
-  <!-- Today vs yesterday -->
-  <section class="panel">
-    <h2>Today vs Yesterday (hourly flight count)</h2>
+  <!-- Today's curve -->
+  <section class="panel wide">
+    <div class="panel-head">
+      <h2>Today's traffic</h2>
+      <span class="panel-sub" id="live-sub">–</span>
+    </div>
     <div class="chart-wrap"><canvas id="liveChart"></canvas></div>
   </section>
 
-  <!-- Patterns -->
-  <section class="grid-2">
+  <!-- Breakdown row: doughnuts + altitude -->
+  <section class="row-3">
     <div class="panel">
-      <h2>Hour-of-day profile (14-day mean)</h2>
-      <div class="chart-wrap"><canvas id="hourChart"></canvas></div>
+      <div class="panel-head"><h2>Aircraft by origin</h2></div>
+      <div class="chart-wrap donut"><canvas id="countryChart"></canvas></div>
+      <div class="donut-center" id="country-total">–</div>
     </div>
     <div class="panel">
-      <h2>Average daily traffic by weekday</h2>
+      <div class="panel-head"><h2>By airline</h2></div>
+      <div class="chart-wrap donut"><canvas id="airlineChart"></canvas></div>
+      <div class="donut-center" id="airline-total">–</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>By altitude band</h2></div>
+      <div class="chart-wrap donut"><canvas id="altChart"></canvas></div>
+      <div class="donut-center" id="alt-total">–</div>
+    </div>
+  </section>
+
+  <!-- 7-day overlay + day-part -->
+  <section class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><h2>Last 7 days — hourly shape</h2></div>
+      <div class="chart-wrap tall"><canvas id="weekChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Traffic by time of day</h2></div>
+      <div class="chart-wrap tall"><canvas id="daypartChart"></canvas></div>
+    </div>
+  </section>
+
+  <!-- Weekday + hour profile -->
+  <section class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><h2>Average by weekday</h2></div>
       <div class="chart-wrap"><canvas id="weekdayChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Hour-of-day profile</h2></div>
+      <div class="chart-wrap"><canvas id="hourChart"></canvas></div>
     </div>
   </section>
 
   <!-- Anomalies -->
-  <section class="panel" id="anomalies-panel" style="display:none">
-    <h2>⚠️ Regime / anomaly flags (last 3 days vs prior week)</h2>
-    <div id="anomalies-body"></div>
+  <section class="panel wide" id="anomalies-panel" style="display:none">
+    <div class="panel-head"><h2>⚠️ Traffic anomalies</h2></div>
+    <div id="anomalies-body" class="anomaly-list"></div>
   </section>
 
   <!-- Forecasts -->
   <section class="grid-2">
     <div class="panel">
-      <h2>Forecast accuracy — actual vs predicted (h=1)</h2>
+      <div class="panel-head"><h2>Forecast accuracy — next-hour (h=1)</h2></div>
       <div class="chart-wrap tall"><canvas id="fcChart"></canvas></div>
     </div>
     <div class="panel">
-      <h2>Latest forecast (next 6h)</h2>
-      <div id="latest-fc" class="info-body">…</div>
+      <div class="panel-head"><h2>Latest 6-hour outlook</h2></div>
+      <div class="chart-wrap tall"><canvas id="outlookChart"></canvas></div>
+      <div class="outlook-meta" id="outlook-meta"></div>
     </div>
   </section>
 
-  <!-- Health + coverage -->
-  <section class="panel">
-    <h2>System health &amp; data coverage (last 10 days)</h2>
+  <!-- Health -->
+  <section class="panel wide">
+    <div class="panel-head"><h2>Pipeline health</h2></div>
     <div id="health-body"></div>
   </section>
 
-  <!-- Reports -->
-  <section class="panel">
-    <h2>Daily PDF reports</h2>
-    <div id="reports-body"></div>
-  </section>
-
-  <footer>Auto-refresh every 60s · generated at <span id="gen-at">–</span> UTC</footer>
+  <footer>
+    <span class="mono" id="foot-updated">–</span>
+    <span class="dotpulse"></span>
+    <span>auto-refresh 60s</span>
+  </footer>
 
   <script src="/static/app.js"></script>
 </body>

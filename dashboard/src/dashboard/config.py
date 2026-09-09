@@ -17,7 +17,7 @@ class S3Settings(BaseSettings):
     features_prefix: str = Field(default="features/hourly")
     forecasts_prefix: str = Field(default="forecasts/hourly")
     reports_prefix: str = Field(default="reports/daily")
-    region: str = Field(default="us-east-1")
+    region: str = Field(default="ap-south-1")
     access_key_id: str | None = Field(default=None, validation_alias="AWS_ACCESS_KEY_ID")
     secret_access_key: str | None = Field(default=None, validation_alias="AWS_SECRET_ACCESS_KEY")
 
