@@ -66,7 +66,10 @@ feature_image = (
     .add_local_dir("./feature-engineering", "/root/feature", copy=True, ignore=_ignore)
 )
 
-# Model-training image (sklearn + mlflow)
+# Model-training image (sklearn + xgboost + mlflow)
+# NOTE: keep this list in sync with model-training/pyproject.toml.
+# A missing `xgboost` here broke the scheduled retrain with
+# ModuleNotFoundError; tests/unit/test_modal_images.py guards the drift.
 training_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -79,6 +82,7 @@ training_image = (
         "matplotlib>=3.8.0",
         "seaborn>=0.13.0",
         "scikit-learn>=1.4.0",
+        "xgboost>=2.0.0",
         "mlflow==3.15.2",
         "anyio>=4.0.0",
     )
