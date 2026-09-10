@@ -10,10 +10,12 @@ Promotion happens on the MLflow server (Modal) via the tracking API.
 """
 
 
-import mlflow
 from loguru import logger
 from src.forecasting.config import settings
 
+# NOTE: mlflow is imported lazily inside promote_champion(). The champion
+# *selection* logic (select_champion/_aggregate) is pure and should stay
+# usable without the heavy MLflow dependency installed.
 # Minimum number of forecast comparisons required before we auto-promote.
 # Avoids flipping the champion on tiny sample counts / noise.
 MIN_COMPARISONS = 20
@@ -54,6 +56,8 @@ def select_champion(evals: list[dict],
 
 def promote_champion(decision: dict) -> dict:
     """Promote the champion model version to Production in MLflow."""
+    import mlflow
+
     champion = decision["champion"]
     mlflow.set_tracking_uri(settings.forecast.mlflow_tracking_uri)
     client = mlflow.tracking.MlflowClient()
