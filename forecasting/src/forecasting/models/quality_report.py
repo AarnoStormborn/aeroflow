@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 try:
     import IPython
+
     if not hasattr(IPython, "get_ipython"):
         IPython.get_ipython = lambda: None
     if not hasattr(IPython, "version_info"):
@@ -72,11 +73,16 @@ def render_graph(agg: dict[str, dict[str, dict]]) -> bytes:
         m = agg[name]
         mapes = [m.get(h, {}).get("mean_mape", 0) for h in all_h]
         x = np.arange(len(all_h)) + i * width
-        bars = ax.bar(x, mapes, width, label=short[name], color=colors[i % len(colors)],
-                      alpha=0.85)
+        bars = ax.bar(x, mapes, width, label=short[name], color=colors[i % len(colors)], alpha=0.85)
         for bar, v in zip(bars, mapes, strict=True):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-                    f"{v:.1f}", ha="center", va="bottom", fontsize=8)
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.3,
+                f"{v:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
 
     ax.set_xticks(np.arange(len(all_h)) + width * (len(model_names) - 1) / 2)
     ax.set_xticklabels([f"{h}h" for h in all_h])
@@ -94,8 +100,7 @@ def render_graph(agg: dict[str, dict[str, dict]]) -> bytes:
     return buf.getvalue()
 
 
-def send_discord_report(agg: dict[str, dict[str, dict]], png_bytes: bytes,
-                        n_forecasts: int) -> bool:
+def send_discord_report(agg: dict[str, dict[str, dict]], png_bytes: bytes, n_forecasts: int) -> bool:
     if not DISCORD_ENABLED or not DISCORD_WEBHOOK_URL:
         print("Discord disabled or no webhook — skipping")
         return False
@@ -116,9 +121,7 @@ def send_discord_report(agg: dict[str, dict[str, dict]], png_bytes: bytes,
         lines.append(line)
     summary_text = "\n".join(lines) if lines else "No evaluable forecasts yet."
 
-    color = 0x00FF00 if all(
-        h.get("mean_mape", 99) < 25 for m in agg.values() for h in m.values()
-    ) else 0xFFA500
+    color = 0x00FF00 if all(h.get("mean_mape", 99) < 25 for m in agg.values() for h in m.values()) else 0xFFA500
 
     embed = {
         "title": "📈 Forecast Quality — Model Comparison",
@@ -138,8 +141,7 @@ def send_discord_report(agg: dict[str, dict[str, dict]], png_bytes: bytes,
     files = {"forecast_accuracy.png": ("forecast_accuracy.png", png_bytes, "image/png")}
     try:
         with httpx.Client(timeout=20) as client:
-            resp = client.post(DISCORD_WEBHOOK_URL,
-                               data={"payload_json": json.dumps(payload)}, files=files)
+            resp = client.post(DISCORD_WEBHOOK_URL, data={"payload_json": json.dumps(payload)}, files=files)
             if resp.status_code in (200, 204):
                 print("Forecast quality report sent to Discord")
                 return True
@@ -164,15 +166,6 @@ def main():
             print(f"  {name} h={h}: {b['mean_mape']:.2f}% ({b['n']} fcst)")
     png = render_graph(agg)
     send_discord_report(agg, png, len(evals))
-
-    # Auto-promote the champion model if enough comparisons accumulated
-    from src.forecasting.models.champion import run_autopromote
-
-    promo = run_autopromote(evals)
-    print("Autopromote:", promo)
-    if promo.get("autopromoted"):
-        print(f"🏆 Champion: {promo['champion']} v{promo.get('version')} "
-              f"(h=1 MAPE {promo.get('h1_mape', 0):.2f}%)")
 
 
 if __name__ == "__main__":

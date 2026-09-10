@@ -2,7 +2,6 @@
 
 Covers the pure-logic pieces that don't need live S3/MLflow:
 - feature vector construction (lag/rolling/calendar semantics)
-- champion selection math
 - quality-report aggregation and rendering
 """
 
@@ -10,7 +9,6 @@ from datetime import datetime, timezone
 
 import polars as pl
 from src.forecasting.data.loader import build_feature_vector
-from src.forecasting.models.champion import select_champion
 from src.forecasting.models.quality_report import (
     aggregate_by_model_horizon,
     render_graph,
@@ -37,9 +35,9 @@ def test_build_feature_vector_basic():
     target = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
     feats = build_feature_vector(df, target)
 
-    assert feats[0] == 12.0        # hour_of_day
-    assert feats[1] == 1.0         # day_of_week (Mon)
-    assert feats[2] == 0.0         # is_weekend (Mon -> not weekend)
+    assert feats[0] == 12.0  # hour_of_day
+    assert feats[1] == 1.0  # day_of_week (Mon)
+    assert feats[2] == 0.0  # is_weekend (Mon -> not weekend)
     # lag_1h: count at 11:00 = 50 + (11 % 24) = 61
     assert feats[3] == 61.0
     # lag_24h: count at 12:00 prev day (Sep 6) = 50 + (12 % 24) = 62
@@ -55,8 +53,8 @@ def test_build_feature_vector_weekend():
     # Sep 6 2026 is a Sunday; in range with lag_24h (Sep 5) available
     target = datetime(2026, 9, 6, 8, 0, tzinfo=timezone.utc)
     feats = build_feature_vector(df, target)
-    assert feats[1] == 7.0   # day_of_week: Sunday = isoweekday 7
-    assert feats[2] == 1.0   # is_weekend
+    assert feats[1] == 7.0  # day_of_week: Sunday = isoweekday 7
+    assert feats[2] == 1.0  # is_weekend
 
 
 def test_build_feature_vector_insufficient_history():
@@ -92,40 +90,20 @@ def test_recursive_prediction_uses_predicted_counts():
     assert feats[4] == 55.0  # lag_24h from predicted
 
 
-def test_champion_selection():
-    """Selects lower-MAPE model once enough comparisons exist."""
-    fake = [
-        {"models": {
-            "model-a": {"per_horizon_mean_mape": {"1": 10.0}},
-            "model-b": {"per_horizon_mean_mape": {"1": 20.0}},
-        }} for _ in range(25)
-    ]
-    decision = select_champion(fake)
-    assert decision is not None
-    assert decision["champion"] == "model-a"
-
-
-def test_champion_selection_insufficient():
-    """No champion until min comparisons met."""
-    fake = [
-        {"models": {
-            "model-a": {"per_horizon_mean_mape": {"1": 10.0}},
-            "model-b": {"per_horizon_mean_mape": {"1": 20.0}},
-        }} for _ in range(3)  # too few
-    ]
-    assert select_champion(fake) is None
-
-
 def test_quality_aggregation():
     """Aggregates per-model per-horizon MAPE across evals."""
     evals = [
-        {"models": {
-            "m1": {"per_horizon_mean_mape": {"1": 5.0, "2": 6.0}},
-            "m2": {"per_horizon_mean_mape": {"1": 8.0}},
-        }},
-        {"models": {
-            "m1": {"per_horizon_mean_mape": {"1": 7.0, "2": 8.0}},
-        }},
+        {
+            "models": {
+                "m1": {"per_horizon_mean_mape": {"1": 5.0, "2": 6.0}},
+                "m2": {"per_horizon_mean_mape": {"1": 8.0}},
+            }
+        },
+        {
+            "models": {
+                "m1": {"per_horizon_mean_mape": {"1": 7.0, "2": 8.0}},
+            }
+        },
     ]
     agg = aggregate_by_model_horizon(evals)
     assert agg["m1"]["1"]["mean_mape"] == 6.0  # avg of 5,7

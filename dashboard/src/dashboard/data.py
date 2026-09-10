@@ -397,7 +397,6 @@ def forecasts_snapshot() -> dict:
                     actuals[r["hour_start"].isoformat()] = float(r["flight_count"])
 
         model_h1: dict[str, list] = defaultdict(list)
-        model_h6: dict[str, list] = defaultdict(list)
         for fkey in files:
             fc = store.read_forecast(fkey)
             if not fc or "models" not in fc:
@@ -410,12 +409,11 @@ def forecasts_snapshot() -> dict:
                         "pred": round(float(h1["predicted_flight_count"]), 1),
                         "actual": actuals.get(h1["hour_start"]),
                     })
-                qd = m.get("quarter_daily", [])
-                if len(qd) == 6:
-                    model_h6[name].append({
-                        "target": qd[-1]["hour_start"],
-                        "pred6": round(float(qd[-1]["predicted_flight_count"]), 1),
-                    })
+
+        # Only report accuracy for models that are still being served. The
+        # archive contains history from the retired A/B model
+        # (flight-traffic-forecaster); plotting it would imply it still runs.
+        active_models = set(latest_fc.get("models", {})) if latest_fc else set()
 
         return {
             "latest_generated": latest_fc["generated_at"] if latest_fc else None,
@@ -425,12 +423,14 @@ def forecasts_snapshot() -> dict:
                         "h1": m["hourly"]["predicted_flight_count"],
                         "series": [p["predicted_flight_count"] for p in m["quarter_daily"]],
                         "hours": [p["hour_start"][11:16] for p in m["quarter_daily"]],
+                        # Registered version that produced this forecast (provenance)
+                        "version": m.get("model_version"),
                     }
                     for n, m in latest_fc["models"].items()
                 }
                 if latest_fc and "models" in latest_fc else {}
             ),
-            "h1_history": {n: v for n, v in model_h1.items()},
+            "h1_history": {n: v for n, v in model_h1.items() if n in active_models},
             "num_forecasts": len(files),
         }
 

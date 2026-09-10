@@ -29,4 +29,9 @@ uv run python -m src.forecasting.models.forecaster
 Environment (via repo root `.env`):
 - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_S3_BUCKET_NAME`
 - `FORECAST_MLFLOW_TRACKING_URI` (defaults to the Modal MLflow server)
-- Model: `flight-traffic-forecaster` @ `Production` stage
+- Model: `flight-traffic-hourly` @ `Production` (retrained every 3 days)
+
+The service serves a **single** model. An A/B period ran `flight-traffic-forecaster`
+(Dec–Jan) alongside `flight-traffic-hourly` (current regime); the former was
+retired after it lost decisively (paired h=1 MAPE 204% vs 69%, losing 69/69
+shared target-hours). Every forecast records the producing `model_version`.

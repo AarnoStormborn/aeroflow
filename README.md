@@ -107,7 +107,9 @@ Access MLflow UI at **http://localhost:5000**
 ### MLflow Artifacts
 - **Metrics**: MAE, MAPE, R² (train/test)
 - **Plots**: Forecast, residuals, feature importance
-- **Model**: Registered as `flight-traffic-forecaster`
+- **Production model**: `flight-traffic-hourly` (retrained every 3 days on the
+  freshest features). `flight-traffic-forecaster` is the older Dec–Jan model —
+  retired from serving but kept in the registry for reference.
 
 ---
 

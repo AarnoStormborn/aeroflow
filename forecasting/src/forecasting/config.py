@@ -27,31 +27,36 @@ class S3Settings(BaseSettings):
 class ForecastSettings(BaseSettings):
     """Forecasting configuration."""
 
-    # MLflow models to run in PARALLEL for comparison. Each produces
-    # predictions for the same hours so we can evaluate which model performs
-    # better against actuals.
-    mlflow_tracking_uri: str = Field(
-        default="https://harshsingh90220--aeroflow-mlflow-ui.modal.run"
+    # MLflow model to serve. Per-model forecasts are keyed by name in the
+    # output so the storage format stays open to more models later, but we
+    # deliberately serve ONE model: `flight-traffic-hourly`, which retrains on
+    # the current traffic regime and decisively outscored the older
+    # Dec-Jan `flight-traffic-forecaster` (paired h=1 MAPE 69% vs 204%, and it
+    # won 69/69 shared target-hours). Running the old model in parallel is no
+    # longer useful, so the A/B setup was retired.
+    mlflow_tracking_uri: str = Field(default="https://harshsingh90220--aeroflow-mlflow-ui.modal.run")
+    # (name, stage) pairs — every entry is forecast and stored per run
+    models: list[tuple[str, str]] = Field(
+        default=[
+            ("flight-traffic-hourly", "Production"),  # retrained every 3 days
+        ]
     )
-    # (name, stage) pairs — both are run + stored per forecast
-    models: list[tuple[str, str]] = Field(default=[
-        ("flight-traffic-forecaster", "Production"),  # trained Dec-Jan
-        ("flight-traffic-hourly", "Production"),      # trained Sep (current)
-    ])
 
     # Forecast horizons (hours)
-    hourly_horizon: int = Field(default=1)   # next hour
+    hourly_horizon: int = Field(default=1)  # next hour
     quarter_day_horizon: int = Field(default=6)  # next 6 hours
 
     # Feature columns the model expects (order matters)
-    feature_columns: list[str] = Field(default=[
-        "hour_of_day",
-        "day_of_week",
-        "is_weekend",
-        "lag_1h",
-        "lag_24h",
-        "rolling_mean_6h",
-    ])
+    feature_columns: list[str] = Field(
+        default=[
+            "hour_of_day",
+            "day_of_week",
+            "is_weekend",
+            "lag_1h",
+            "lag_24h",
+            "rolling_mean_6h",
+        ]
+    )
 
     model_config = SettingsConfigDict(env_prefix="FORECAST_", populate_by_name=True)
 

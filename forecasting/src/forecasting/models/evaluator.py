@@ -3,8 +3,8 @@ Evaluation: compare stored forecasts against actual flight counts, per model.
 
 For each forecast JSON in S3, once the actual data for its forecast
 horizon has elapsed, compute per-horizon error (h=1..6) for EACH model in
-the forecast (the multi-model format stores predictions from every model).
-This lets us compare which model performs better.
+the forecast document. The document is keyed by model name, so this stays
+correct for the single served model and would also cover multiple models.
 
 Backward-compatible: also handles the older single-model format
 (horizons.quarter_daily).
@@ -51,10 +51,7 @@ class ForecastEvaluator:
         handling both new multi-model and old single-model formats."""
         if "models" in fc:
             # New format: {"models": {name: {"hourly":..., "quarter_daily":[...]}}}
-            return {
-                name: m["quarter_daily"]
-                for name, m in fc["models"].items()
-            }
+            return {name: m["quarter_daily"] for name, m in fc["models"].items()}
         # Old format: single model with horizons.quarter_daily
         return {
             fc.get("model", "unknown"): fc["horizons"]["quarter_daily"],
@@ -72,9 +69,7 @@ class ForecastEvaluator:
             actuals[row["hour_start"]] = float(row["flight_count"])
         return actuals
 
-    def evaluate_forecast(
-        self, key: str, actuals: dict[datetime, float], now: datetime | None = None
-    ) -> dict | None:
+    def evaluate_forecast(self, key: str, actuals: dict[datetime, float], now: datetime | None = None) -> dict | None:
         """Evaluate one forecast file per model. Returns None if actuals
         haven't elapsed yet.
 
@@ -105,14 +100,16 @@ class ForecastEvaluator:
                 pred = step["predicted_flight_count"]
                 error = pred - actual
                 mape = abs(error) / actual * 100 if actual else None
-                rows.append({
-                    "hour_start": target.isoformat(),
-                    "horizon_hours": step["horizon_hours"],
-                    "actual": round(actual, 2),
-                    "predicted": pred,
-                    "error": round(error, 2),
-                    "mape_pct": round(mape, 2) if mape is not None else None,
-                })
+                rows.append(
+                    {
+                        "hour_start": target.isoformat(),
+                        "horizon_hours": step["horizon_hours"],
+                        "actual": round(actual, 2),
+                        "predicted": pred,
+                        "error": round(error, 2),
+                        "mape_pct": round(mape, 2) if mape is not None else None,
+                    }
+                )
 
             if not rows:
                 continue
@@ -122,17 +119,13 @@ class ForecastEvaluator:
             for r in rows:
                 if r["mape_pct"] is not None:
                     agg.setdefault(r["horizon_hours"], []).append(r["mape_pct"])
-            per_horizon = {
-                str(h): round(sum(v) / len(v), 2) for h, v in sorted(agg.items())
-            }
+            per_horizon = {str(h): round(sum(v) / len(v), 2) for h, v in sorted(agg.items())}
             all_mape = [r["mape_pct"] for r in rows if r["mape_pct"] is not None]
 
             per_model[model_name] = {
                 "samples": len(rows),
                 "per_horizon_mean_mape": per_horizon,
-                "overall_mean_mape": (
-                    round(sum(all_mape) / len(all_mape), 2) if all_mape else None
-                ),
+                "overall_mean_mape": (round(sum(all_mape) / len(all_mape), 2) if all_mape else None),
             }
 
         if not per_model:
@@ -158,9 +151,7 @@ class ForecastEvaluator:
         parseable = []
         for key in keys:
             try:
-                fc = json.loads(
-                    self._s3.get_object(Bucket=self.bucket, Key=key)["Body"].read()
-                )
+                fc = json.loads(self._s3.get_object(Bucket=self.bucket, Key=key)["Body"].read())
                 gen = datetime.fromisoformat(fc["generated_at"])
                 parseable.append((key, gen))
                 if gen < min_generated:
@@ -173,8 +164,7 @@ class ForecastEvaluator:
 
         # Only forecasts old enough matter; compute actuals window once
         eligible = [
-            (key, gen) for key, gen in parseable
-            if (now - gen).total_seconds() >= (self.quarter_horizon + 1) * 3600
+            (key, gen) for key, gen in parseable if (now - gen).total_seconds() >= (self.quarter_horizon + 1) * 3600
         ]
         if not eligible:
             logger.info("No forecasts old enough to evaluate yet")
@@ -209,16 +199,17 @@ def run_eval() -> list[dict]:
         for r in results:
             for name, m in r["models"].items():
                 if "1" in m["per_horizon_mean_mape"]:
-                    model_h1.setdefault(name, []).append(
-                        m["per_horizon_mean_mape"]["1"])
+                    model_h1.setdefault(name, []).append(m["per_horizon_mean_mape"]["1"])
                 if m["overall_mean_mape"] is not None:
                     model_overall.setdefault(name, []).append(m["overall_mean_mape"])
         for name in sorted(model_h1):
             h1 = model_h1[name]
             ov = model_overall.get(name, [])
             print(f"  {name}:")
-            print(f"    h=1 MAPE: {sum(h1)/len(h1):.2f}% over {len(h1)} forecasts"
-                  + (f" | overall: {sum(ov)/len(ov):.2f}%" if ov else ""))
+            print(
+                f"    h=1 MAPE: {sum(h1) / len(h1):.2f}% over {len(h1)} forecasts"
+                + (f" | overall: {sum(ov) / len(ov):.2f}%" if ov else "")
+            )
     else:
         print("No forecasts old enough to evaluate yet.")
     return results

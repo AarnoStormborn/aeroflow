@@ -52,6 +52,25 @@ class ForecastEngine:
             self.models[name] = mlflow.sklearn.load_model(model_uri)
         return self.models[name]
 
+    def _resolve_version(self, name: str, stage: str) -> str | None:
+        """Resolve the MLflow version that `models:/{name}/{stage}` points at.
+
+        Recorded in the forecast output so a stored prediction can be traced
+        back to the exact registered version that produced it. Returns None if
+        the lookup fails -- provenance is desirable but must never block a
+        forecast from being produced.
+        """
+        try:
+            client = mlflow.tracking.MlflowClient()
+            versions = [v for v in client.search_model_versions(f"name='{name}'") if v.current_stage == stage]
+            if not versions:
+                logger.warning(f"{name}: no version in stage {stage!r} to attribute")
+                return None
+            return max(versions, key=lambda v: int(v.version)).version
+        except Exception as e:
+            logger.warning(f"Could not resolve version for {name}/{stage}: {e}")
+            return None
+
     def _predict_one_model(self, model, hourly, current_hour: datetime) -> list[dict]:
         """Recursive forecast for ONE model: h=1..6. Returns predictions."""
         # Map of future-hour predictions built up during recursion (per model,
@@ -62,15 +81,15 @@ class ForecastEngine:
         target = current_hour + timedelta(hours=1)
         for step in range(1, self.horizon + 1):
             features = build_feature_vector(hourly, target, predicted_counts=predicted)
-            X = pl.DataFrame(
-                [dict(zip(self.feature_cols, features, strict=True))]
-            ).to_numpy()
+            X = pl.DataFrame([dict(zip(self.feature_cols, features, strict=True))]).to_numpy()
             pred_val = float(model.predict(X)[0])
-            predictions.append({
-                "hour_start": target.isoformat(),
-                "horizon_hours": step,
-                "predicted_flight_count": round(pred_val, 2),
-            })
+            predictions.append(
+                {
+                    "hour_start": target.isoformat(),
+                    "horizon_hours": step,
+                    "predicted_flight_count": round(pred_val, 2),
+                }
+            )
             predicted[target] = pred_val  # feed back for recursion
             target += timedelta(hours=1)
         return predictions
@@ -86,10 +105,7 @@ class ForecastEngine:
         # runs mid-hour), so only use hours strictly before now's hour.
         now_hour = now.replace(minute=0, second=0, microsecond=0)
         complete = hourly.filter(pl.col("hour_start") < now_hour)
-        last_actual = (
-            complete.select(pl.col("hour_start").max()).item()
-            if not complete.is_empty() else None
-        )
+        last_actual = complete.select(pl.col("hour_start").max()).item() if not complete.is_empty() else None
         if last_actual is None:
             raise ValueError("No complete actual hour available for forecasting")
 
@@ -99,21 +115,26 @@ class ForecastEngine:
         current_hour = last_actual
         last_actual_str = last_actual.isoformat()
 
-        # Run each model
+        # Run each configured model
         models_out = {}
         for name, stage in settings.forecast.models:
             model = self._load_model(name, stage)
             preds = self._predict_one_model(model, hourly, current_hour)
             models_out[name] = {
                 "model_stage": stage,
-                "hourly": preds[0],        # h=1
-                "quarter_daily": preds,    # h=1..6
+                # Provenance: which registered version produced this forecast
+                "model_version": self._resolve_version(name, stage),
+                "hourly": preds[0],  # h=1
+                "quarter_daily": preds,  # h=1..6
             }
 
         result = {
+            # Schema version: bumped when the forecast document shape changes.
+            # v2 adds per-model provenance (model_version / model_stage).
+            "schema_version": 2,
             "generated_at": now.isoformat(),
             "last_actual_hour": last_actual_str,
-            "models": models_out,  # keyed by model name for comparison
+            "models": models_out,  # keyed by model name
         }
         return result
 

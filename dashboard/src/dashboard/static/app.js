@@ -254,8 +254,11 @@ async function loadForecasts() {
     });
   }
   const meta = document.getElementById("outlook-meta");
+  const versions = Object.entries(lm)
+    .map(([n, m]) => `${n.replace("flight-traffic-", "")}${m.version ? " v" + m.version : ""}`)
+    .join(", ");
   meta.innerHTML = d.latest_generated
-    ? `generated <span class="mono">${fmtStamp(d.latest_generated)} UTC</span> · ${d.num_forecasts} forecasts stored`
+    ? `model <span class="mono">${versions || "–"}</span> · generated <span class="mono">${fmtStamp(d.latest_generated)} UTC</span> · ${d.num_forecasts} forecasts stored`
     : "no forecasts yet";
 }
 
