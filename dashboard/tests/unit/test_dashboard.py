@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from src.dashboard.data import _cached, _hour_key, recent_raw_days
+from src.dashboard.data import _cached, _error_stats, _hour_key, recent_raw_days
 
 
 def test_recent_raw_days_length_and_order():
@@ -73,3 +73,31 @@ def test_cached_respects_ttl():
     time_mod.sleep(0.02)
     second = _cached("ttl", loader, ttl=0.01)
     assert second == 2  # recomputed after ttl
+
+
+def test_error_stats_basic():
+    """MAPE/MAE over (predicted, actual) pairs."""
+    # abs errs 2, 4, 3 ; pct errs 20%, 20%, 10%
+    stats = _error_stats([(8.0, 10.0), (24.0, 20.0), (27.0, 30.0)])
+    assert stats["n"] == 3
+    assert stats["mae"] == 3.0
+    assert stats["mape"] == 16.7
+
+
+def test_error_stats_empty_is_null_not_zero():
+    """No scored hours must read as 'unknown', not as a perfect score."""
+    assert _error_stats([]) == {"n": 0, "mape": None, "mae": None, "bias_pct": None}
+
+
+def test_error_stats_ignores_zero_actuals_for_percentage():
+    """MAPE is undefined when actual is 0, but MAE still counts that hour."""
+    stats = _error_stats([(5.0, 0.0), (10.0, 10.0)])
+    assert stats["n"] == 2
+    assert stats["mae"] == 2.5
+    assert stats["mape"] == 0.0
+
+
+def test_error_stats_bias_sign():
+    """Positive bias means over-prediction."""
+    assert _error_stats([(20.0, 10.0)])["bias_pct"] == 100.0
+    assert _error_stats([(10.0, 20.0)])["bias_pct"] == -50.0

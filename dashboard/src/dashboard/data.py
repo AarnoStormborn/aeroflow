@@ -585,6 +585,25 @@ def _load_complete_actuals(start: date, end: date) -> dict[str, float]:
     return actuals
 
 
+def _error_stats(pairs: list[tuple[float, float]]) -> dict:
+    """MAPE / MAE / bias for (predicted, actual) pairs.
+
+    MAPE is the mean absolute percentage error; MAE is in aircraft. Both are
+    computed over scored hours only (actuals that have completed).
+    """
+    if not pairs:
+        return {"n": 0, "mape": None, "mae": None, "bias_pct": None}
+    maes = [abs(p - a) for p, a in pairs]
+    pcts = [abs(p - a) / a * 100 for p, a in pairs if a]
+    biases = [(p - a) / a * 100 for p, a in pairs if a]
+    return {
+        "n": len(pairs),
+        "mape": round(sum(pcts) / len(pcts), 1) if pcts else None,
+        "mae": round(sum(maes) / len(maes), 2),
+        "bias_pct": round(sum(biases) / len(biases), 1) if biases else None,
+    }
+
+
 def forecasts_snapshot() -> dict:
     store = S3Store()
 
@@ -657,6 +676,17 @@ def forecasts_snapshot() -> dict:
                 if latest_fc and "models" in latest_fc else {}
             ),
             "h1_history": model_h1,
+            # Accuracy summary per model, over the scored hours above.
+            "accuracy": {
+                name: _error_stats(
+                    [
+                        (float(r["pred"]), float(r["actual"]))
+                        for r in rows
+                        if r.get("actual") is not None
+                    ]
+                )
+                for name, rows in model_h1.items()
+            },
             "num_forecasts": len(files),
         }
 

@@ -19,10 +19,10 @@
       document.documentElement.setAttribute("data-theme", t);
     })();
   </script>
-  <script src="/static/chart.umd.min.js?v=19"></script>
+  <script src="/static/chart.umd.min.js?v=20"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=19">
+  <link rel="stylesheet" href="/static/style.css?v=20">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -144,7 +144,7 @@
   <!-- Forecasts -->
   <section class="grid-2">
     <div class="panel">
-      <div class="panel-head"><h2>Forecast accuracy — next-hour (h=1)</h2></div>
+      <div class="panel-head"><h2>Forecast accuracy — next-hour (h=1)</h2><span class="panel-sub" id="fc-stats">–</span></div>
       <div class="chart-wrap tall"><canvas id="fcChart"></canvas>
       <div class="skeleton" aria-hidden="true"></div>
     </div>
@@ -171,6 +171,6 @@
     <span>auto-refresh 3m</span>
   </footer>
 
-  <script src="/static/app.js?v=19"></script>
+  <script src="/static/app.js?v=20"></script>
 </body>
 </html>

@@ -183,6 +183,8 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 .panel-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
 .panel-head h2 { font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: .2px; }
 .panel-sub { color: var(--muted); font-size: 12px; }
+.panel-sub b { color: var(--text); font-weight: 700; }
+.stat-n { opacity: .7; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 @media (max-width: 1000px) { .grid-2, .row-3 { grid-template-columns: 1fr; } }

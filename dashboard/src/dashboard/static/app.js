@@ -335,6 +335,22 @@ function renderForecasts(d) {
   meta.innerHTML = d.latest_generated
     ? `model <span class="mono">${versions || "–"}</span> · generated <span class="mono">${fmtStamp(d.latest_generated)} UTC</span> · ${d.num_forecasts} forecasts stored`
     : "no forecasts yet";
+
+  // Accuracy summary for the h=1 chart, computed server-side over scored hours.
+  const stats = document.getElementById("fc-stats");
+  if (stats) {
+    const acc = Object.values(d.accuracy || {})[0];
+    if (acc && acc.mape !== null && acc.mape !== undefined) {
+      const bias = acc.bias_pct;
+      const biasTxt = (bias === null || bias === undefined)
+        ? ""
+        : ` · bias ${bias > 0 ? "+" : ""}${bias}%`;
+      stats.innerHTML = `MAPE <b>${acc.mape}%</b> · MAE <b>${acc.mae}</b> aircraft${biasTxt}
+        <span class="stat-n">(${acc.n} h)</span>`;
+    } else {
+      stats.textContent = "no scored hours yet";
+    }
+  }
 }
 
 /* ---------------- health ---------------- */
