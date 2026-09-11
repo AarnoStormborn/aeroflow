@@ -12,6 +12,7 @@ raw snapshots so the dashboard feels "live".
 import io
 import json
 import re
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -23,18 +24,96 @@ from src.dashboard.config import settings
 
 # In-memory cache: key -> (expires_at, value)
 _CACHE: dict[str, tuple[float, Any]] = {}
-_CACHE_TTL = 45.0  # seconds
+# Aggregates are derived from data that only changes when ingestion runs (every
+# 15 min), so recomputing more often than that is pure waste. This TTL is the
+# ceiling for derived values; individual entries may override it.
+_CACHE_TTL = 180.0
 # How many most-recent raw files to combine for 'live breakdown' views
 LIVE_TICKS = 6
+# Forecasts are written hourly, so the archive grows forever. Only the newest
+# files can influence the 60-point accuracy chart, so cap the scan to stop the
+# endpoint getting slower every hour.
+FORECAST_FILES_MAX = 120
+
+# Immutable-object cache: S3 objects under our prefixes are timestamped and
+# never rewritten, so a parsed value can be reused for the container's life.
+# This is the main cost fix: without it every request re-downloaded and
+# re-parsed the entire archive (100+ forecast JSONs, ~95 raw files per day).
+_OBJECTS: dict[str, tuple[Any, float | None]] = {}
+_OBJECTS_MAX = 5000
+# A missing object may simply not be written yet (e.g. today's feature file is
+# produced the following day), so absence is cached only briefly.
+_NEGATIVE_TTL = 300.0
 
 
 def _cached(key: str, loader, ttl: float = _CACHE_TTL):
-    now = __import__("time").time()
+    now = time.time()
     hit = _CACHE.get(key)
     if hit and hit[0] > now:
         return hit[1]
     value = loader()
     _CACHE[key] = (now + ttl, value)
+    return value
+
+
+# Aggregates are published as a small JSON payload in S3. A freshly started
+# container has no warm S3/parquet cache, so without this every visit paid the
+# full rebuild -- measured at ~159s of execution across the four endpoints, and
+# repeated on every page load. Serving a ~21 KiB payload instead lets
+# containers scale to zero between visits and answer a cold request in one
+# small GET.
+_PAYLOAD_PREFIX = "dashboard/cache"
+# Rebuilding is cheap now (~2.5s, down from ~159s), so this can be short enough
+# to stay close to the 15-minute ingestion cadence without meaningful cost.
+_PAYLOAD_TTL = 300.0
+_PAYLOAD_MEMO_TTL = 60.0
+
+
+def _payload(store, name: str, compute):
+    """Serve a precomputed payload, rebuilding at most once per _PAYLOAD_TTL.
+
+    Publishing expires globally rather than per container, so total rebuild
+    work is bounded by time instead of by traffic or container churn.
+    """
+    now = time.time()
+    memo = _CACHE.get(f"payload:{name}")
+    if memo and memo[0] > now:
+        return memo[1]
+
+    key = f"{_PAYLOAD_PREFIX}/{name}.json"
+    published = store.get_payload(key)
+    if published and (now - published.get("computed_at", 0)) < _PAYLOAD_TTL:
+        _CACHE[f"payload:{name}"] = (now + _PAYLOAD_MEMO_TTL, published["data"])
+        return published["data"]
+
+    value = compute()
+    store.put_payload(key, {"computed_at": now, "data": value})
+    _CACHE[f"payload:{name}"] = (now + _PAYLOAD_MEMO_TTL, value)
+    return value
+
+
+def _cached_object(key: str, loader):
+    """Return a parsed S3 object, cached by key.
+
+    Present objects never change, so they are cached indefinitely (bounded by
+    _OBJECTS_MAX with oldest-first eviction). Absent objects are cached only
+    for _NEGATIVE_TTL.
+    """
+    now = time.time()
+    hit = _OBJECTS.get(key)
+    if hit is not None:
+        value, expires = hit
+        if expires is None or expires > now:
+            return value
+
+    value = loader()
+    if value is None:
+        _OBJECTS[key] = (None, now + _NEGATIVE_TTL)
+        return None
+    if len(_OBJECTS) >= _OBJECTS_MAX:
+        for stale in list(_OBJECTS)[: _OBJECTS_MAX // 10]:
+            _OBJECTS.pop(stale, None)
+    _OBJECTS[key] = (value, None)
     return value
 
 
@@ -53,25 +132,33 @@ class S3Store:
     def list_raw_files(self, dt: date) -> list[str]:
         prefix = (f"{settings.s3.raw_prefix}/year={dt.year}/month={dt.month:02d}/"
                   f"day={dt.day:02d}/")
-        keys = []
-        for page in self._client.get_paginator("list_objects_v2").paginate(
-            Bucket=self.bucket, Prefix=prefix
-        ):
-            for obj in page.get("Contents", []):
-                if obj["Key"].endswith(".parquet"):
-                    keys.append(obj["Key"])
-        return keys
+
+        def load():
+            keys = []
+            for page in self._client.get_paginator("list_objects_v2").paginate(
+                Bucket=self.bucket, Prefix=prefix
+            ):
+                for obj in page.get("Contents", []):
+                    if obj["Key"].endswith(".parquet"):
+                        keys.append(obj["Key"])
+            return keys
+
+        # Listing must be refetched as new files land, but not on every request.
+        return _cached(f"raw_list:{dt.isoformat()}", load, ttl=120.0)
 
     def read_parquet(self, key: str) -> pl.DataFrame | None:
-        try:
-            resp = self._client.get_object(Bucket=self.bucket, Key=key)
-            return pl.read_parquet(io.BytesIO(resp["Body"].read()))
-        except Exception as e:
-            logger.warning(f"read failed {key}: {e}")
-            return None
+        def load():
+            try:
+                resp = self._client.get_object(Bucket=self.bucket, Key=key)
+                return pl.read_parquet(io.BytesIO(resp["Body"].read()))
+            except Exception as e:
+                logger.warning(f"read failed {key}: {e}")
+                return None
+
+        return _cached_object(key, load)
 
     def _day_hourly(self, dt: date) -> pl.DataFrame:
-        ttl = 60.0 if dt == datetime.now(timezone.utc).date() else 900.0
+        ttl = 120.0 if dt == datetime.now(timezone.utc).date() else 900.0
 
         def load():
             dfs = []
@@ -83,10 +170,9 @@ class S3Store:
                 return pl.DataFrame(schema={
                     "hour_start": pl.Datetime("us", "UTC"),
                     "flight_count": pl.Float64,
-                    "active_now": pl.Float64,
                 })
             raw = pl.concat(dfs, how="diagonal_relaxed")
-            hourly = (
+            return (
                 raw.with_columns(
                     pl.from_epoch(pl.col("capture_time"), time_unit="s")
                     .dt.truncate("1h")
@@ -96,12 +182,6 @@ class S3Store:
                 .agg(pl.col("icao24").n_unique().alias("flight_count"))
                 .sort("hour_start")
             )
-            latest = dfs[-1]
-            active = (
-                latest.select(pl.col("icao24").n_unique()).item()
-                if not latest.is_empty() else 0
-            )
-            return hourly.with_columns(pl.lit(float(active)).alias("active_now"))
 
         return _cached(f"day_hourly:{dt.isoformat()}", load, ttl=ttl)
 
@@ -131,7 +211,7 @@ class S3Store:
                 ).isoformat(),
             }
 
-        return _cached("latest_snapshot", load, ttl=30.0)
+        return _cached("latest_snapshot", load, ttl=120.0)
 
     def latest_ticks(self, n: int = LIVE_TICKS) -> pl.DataFrame:
         """Combine the most recent raw snapshots (across today, falling back
@@ -155,26 +235,30 @@ class S3Store:
                     .sort("capture_time")
                     .unique(subset=["icao24"], keep="last"))
 
-        return _cached("latest_ticks", load, ttl=30.0)
+        return _cached("latest_ticks", load, ttl=120.0)
 
     # ---------- hourly features ----------
 
     def feature_keys(self) -> list[str]:
-        keys = []
-        for page in self._client.get_paginator("list_objects_v2").paginate(
-            Bucket=self.bucket, Prefix=settings.s3.features_prefix
-        ):
-            for obj in page.get("Contents", []):
-                if obj["Key"].endswith(".parquet"):
-                    keys.append(obj["Key"])
-        return keys
+        def load():
+            keys = []
+            for page in self._client.get_paginator("list_objects_v2").paginate(
+                Bucket=self.bucket, Prefix=settings.s3.features_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    if obj["Key"].endswith(".parquet"):
+                        keys.append(obj["Key"])
+            return keys
+
+        return _cached("feature_keys", load, ttl=300.0)
 
     def read_feature_day(self, key: str) -> pl.DataFrame | None:
-        try:
-            self._client.head_object(Bucket=self.bucket, Key=key)
-        except Exception:
-            return None
-        return self.read_parquet(key)
+        def load():
+            if key not in self.feature_keys():
+                return None
+            return self.read_parquet(key)
+
+        return _cached_object(key, load)
 
     def feature_days(self) -> set[date]:
         days = set()
@@ -186,23 +270,47 @@ class S3Store:
 
     # ---------- forecasts ----------
 
-    def forecast_files(self) -> list[str]:
-        keys = []
-        for page in self._client.get_paginator("list_objects_v2").paginate(
-            Bucket=self.bucket, Prefix=settings.s3.forecasts_prefix
-        ):
-            for obj in page.get("Contents", []):
-                if obj["Key"].endswith(".json"):
-                    keys.append(obj["Key"])
-        return sorted(keys)
-
-    def read_forecast(self, key: str) -> dict | None:
+    def get_payload(self, key: str) -> dict | None:
         try:
             resp = self._client.get_object(Bucket=self.bucket, Key=key)
             return json.loads(resp["Body"].read())
-        except Exception as e:
-            logger.warning(f"forecast read failed {key}: {e}")
+        except Exception:
             return None
+
+    def put_payload(self, key: str, value: dict) -> None:
+        try:
+            self._client.put_object(
+                Bucket=self.bucket, Key=key,
+                Body=json.dumps(value).encode(),
+                ContentType="application/json",
+            )
+        except Exception as e:
+            logger.warning(f"payload write failed {key}: {e}")
+
+    def forecast_files(self) -> list[str]:
+        def load():
+            keys = []
+            for page in self._client.get_paginator("list_objects_v2").paginate(
+                Bucket=self.bucket, Prefix=settings.s3.forecasts_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    if obj["Key"].endswith(".json"):
+                        keys.append(obj["Key"])
+            # Keys embed a timestamp, so lexical order is chronological.
+            return sorted(keys)[-FORECAST_FILES_MAX:]
+
+        return _cached("forecast_files", load, ttl=120.0)
+
+    def read_forecast(self, key: str) -> dict | None:
+        def load():
+            try:
+                resp = self._client.get_object(Bucket=self.bucket, Key=key)
+                return json.loads(resp["Body"].read())
+            except Exception as e:
+                logger.warning(f"forecast read failed {key}: {e}")
+                return None
+
+        return _cached_object(key, load)
 
 
 def _hour_key(value: object) -> str:
@@ -229,20 +337,32 @@ def recent_raw_days(days: int = 10) -> list[date]:
     return [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
 
 
+def feature_key_for(dt: date) -> str:
+    return (f"{settings.s3.features_prefix}/year={dt.year}/month={dt.month:02d}/"
+            f"features_{dt.isoformat()}.parquet")
+
+
+def hourly_day(store: S3Store, dt: date) -> pl.DataFrame:
+    """Hourly counts for one day: feature file when available, else raw.
+
+    A feature file holds a complete day of hourly counts in ONE object, whereas
+    the raw path must list and read ~95 parquet files. Preferring features is
+    the difference between 1 and 95 S3 reads per day, which matters because the
+    live and forecast views span several days. Today's features are not written
+    until the next day, so today still falls back to raw.
+    """
+    feat = store.read_feature_day(feature_key_for(dt))
+    if feat is not None and not feat.is_empty():
+        return feat.select(["hour_start", "flight_count"])
+    return store._day_hourly(dt)
+
+
 def hourly_by_day(store: S3Store, days: int = 7) -> dict[str, pl.DataFrame]:
     out: dict[str, pl.DataFrame] = {}
     for dt in recent_raw_days(days):
-        dkey = dt.isoformat()
-        feat = store.read_feature_day(
-            f"{settings.s3.features_prefix}/year={dt.year}/month={dt.month:02d}/"
-            f"features_{dkey}.parquet"
-        )
-        if feat is not None and not feat.is_empty():
-            out[dkey] = feat.select(["hour_start", "flight_count"])
-        else:
-            raw = store._day_hourly(dt)
-            if not raw.is_empty():
-                out[dkey] = raw.select(["hour_start", "flight_count"])
+        df = hourly_day(store, dt)
+        if df is not None and not df.is_empty():
+            out[dt.isoformat()] = df
     return out
 
 
@@ -254,9 +374,9 @@ def live_snapshot() -> dict:
 
     def load():
         today = datetime.now(timezone.utc).date()
-        today_df = store._day_hourly(today)
+        today_df = hourly_day(store, today)
         yesterday = today - timedelta(days=1)
-        yest_df = store._day_hourly(yesterday)
+        yest_df = hourly_day(store, yesterday)
 
         def series(df):
             return [
@@ -280,7 +400,7 @@ def live_snapshot() -> dict:
             "breakdown": breakdown,
         }
 
-    return _cached("live", load, ttl=30.0)
+    return _payload(store, "live", load)
 
 
 def _breakdown(df: pl.DataFrame) -> dict:
@@ -425,7 +545,7 @@ def patterns_snapshot() -> dict:
             "overlay": overlay,
         }
 
-    return _cached("patterns", load)
+    return _payload(store, "patterns", load)
 
 
 def _parse_utc(value: str) -> datetime:
@@ -452,7 +572,7 @@ def _load_complete_actuals(start: date, end: date) -> dict[str, float]:
     actuals: dict[str, float] = {}
     day = start
     while day <= end:
-        df = store._day_hourly(day)
+        df = hourly_day(store, day)
         if df is not None and not df.is_empty():
             for r in df.iter_rows(named=True):
                 hour = r["hour_start"]
@@ -540,7 +660,7 @@ def forecasts_snapshot() -> dict:
             "num_forecasts": len(files),
         }
 
-    return _cached("forecasts", load)
+    return _payload(store, "forecasts", load)
 
 
 def health_snapshot() -> dict:
@@ -575,4 +695,4 @@ def health_snapshot() -> dict:
             "coverage": coverage,
         }
 
-    return _cached("health", load)
+    return _payload(store, "health", load)

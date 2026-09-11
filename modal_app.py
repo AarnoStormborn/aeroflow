@@ -324,7 +324,15 @@ def run_forecast() -> dict:
 @app.function(
     image=dashboard_image,
     secrets=[secrets],
+    # Scale to zero promptly. Requests are cheap now that aggregates are served
+    # from a published payload, so an idle container would bill for pure waiting.
+    scaledown_window=30,
 )
+# The page loads 4 endpoints in parallel. Modal defaults to one input per
+# container, so a single page view would boot 4 containers, each paying the full
+# polars/boto3 import cost. These handlers are I/O-bound, so let one warm
+# container serve a whole page load instead.
+@modal.concurrent(max_inputs=8)
 @modal.asgi_app()
 def dashboard_app():
     """Live traffic + forecasting dashboard (web).
@@ -344,7 +352,9 @@ def dashboard_app():
     image=forecast_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
+    scaledown_window=30,
 )
+@modal.concurrent(max_inputs=4)
 @modal.asgi_app()
 def forecast_api():
     """On-demand forecasting API (GET /forecast, /health, /models)."""
@@ -385,7 +395,7 @@ def run_eval() -> dict:
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
 )
-@modal.concurrent(max_inputs=1)
+@modal.concurrent(max_inputs=8)
 @modal.web_server(port=5000, startup_timeout=120)
 def mlflow_ui():
     """Expose MLflow tracking server on Modal."""

@@ -84,14 +84,15 @@ function renderLive(d) {
 
   // "Aircraft now" is a single OpenSky poll, not an hourly average, so state
   // the snapshot age explicitly instead of implying a running total.
-  const cap = document.getElementById("active-caption");
-  if (cap) {
-    const at = d.active_captured_at ? new Date(d.active_captured_at) : null;
-    const ageMin = at ? Math.round((Date.now() - at.getTime()) / 60000) : null;
-    cap.innerHTML = (ageMin === null)
-      ? "instant snapshot"
-      : `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
-    if (at) cap.title = `Instantaneous count from the ${fmtClock(d.active_captured_at)} UTC satellite poll`;
+  renderActiveCaption();
+
+  function renderActiveCaption() {
+    const cap = document.getElementById("active-caption");
+    if (!cap || !d.active_captured_at) return;
+    const at = new Date(d.active_captured_at);
+    const ageMin = Math.round((Date.now() - at.getTime()) / 60000);
+    cap.innerHTML = `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
+    cap.title = `Instantaneous count from the ${fmtClock(d.active_captured_at)} UTC satellite poll`;
   }
 
   // vs yesterday (compare same elapsed hours)
@@ -485,6 +486,28 @@ async function refresh() {
   }
 }
 
+/* Time-derived UI, refreshed locally without touching the network. Data only
+   changes when ingestion runs (every 15 min), so between data polls this keeps
+   the clock and snapshot age honest at zero cost. */
+function tickLocal() {
+  const clock = document.getElementById("clock");
+  if (clock) clock.textContent = fmtClock(new Date().toISOString());
+
+  const cap = document.getElementById("active-caption");
+  const at = CACHE.live && CACHE.live.active_captured_at
+    ? new Date(CACHE.live.active_captured_at) : null;
+  if (cap && at) {
+    const ageMin = Math.round((Date.now() - at.getTime()) / 60000);
+    cap.innerHTML = `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
+  }
+}
+
 initTheme();
 refresh();
-setInterval(refresh, 60000);
+tickLocal();
+// Data is ingested every 15 min, so polling every 60s was 15x more requests
+// than the data could possibly justify -- each one re-reading S3 and running
+// polars aggregations on Modal. Poll less often; the containers scale down in
+// between.
+setInterval(refresh, 180000);
+setInterval(tickLocal, 15000);
