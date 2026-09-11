@@ -1,8 +1,24 @@
 /* Aeroflow dashboard client — charts, doughnuts, KPIs. */
 
-const PALETTE = ["#5b8cff", "#8f6bff", "#34d399", "#f472b6", "#fbbf24",
-                 "#22d3ee", "#f87171", "#a78bfa", "#4ade80", "#fb923c"];
-const GRAY = "#64748b";
+/* Theme-aware colours, read from the CSS custom properties in style.css so the
+   stylesheet stays the single source of truth. Re-read on every refresh so a
+   theme switch re-colours the charts instead of leaving stale palette values. */
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name) => cs.getPropertyValue(name).trim();
+  return {
+    palette: [
+      v("--accent"), v("--accent2"), v("--green"), v("--pink"), v("--amber"),
+      v("--cyan"), v("--red"), v("--violet"), v("--lime"), v("--orange"),
+    ],
+    muted: v("--muted"),
+    grid: v("--grid"),
+    accentRgb: v("--accent-rgb"),
+    accent2Rgb: v("--accent2-rgb"),
+    greenRgb: v("--green-rgb"),
+  };
+}
+let THEME = readTheme();
 
 function fmtClock(iso) {
   if (!iso) return "–";
@@ -35,15 +51,25 @@ function makeChart(id, cfg) {
 
 function baseScales(yTitle) {
   return {
-    x: { ticks: { color: GRAY, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: "rgba(255,255,255,.04)" } },
-    y: { ticks: { color: GRAY }, grid: { color: "rgba(255,255,255,.05)" }, title: { display: !!yTitle, text: yTitle, color: GRAY } },
+    x: { ticks: { color: THEME.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: THEME.grid } },
+    y: { ticks: { color: THEME.muted }, grid: { color: THEME.grid }, title: { display: !!yTitle, text: yTitle, color: THEME.muted } },
   };
 }
 
 /* ---------------- KPI + live chart ---------------- */
 
+/* Last successful payload per endpoint. Theme switching re-renders from these
+   instead of refetching, so a slow or failing request can never leave some
+   charts painted in the previous theme. */
+const CACHE = Object.create(null);
+
 async function loadLive() {
   const d = await (await fetch("/api/live")).json();
+  CACHE.live = d;
+  renderLive(d);
+}
+
+function renderLive(d) {
   document.getElementById("live-sub").textContent = `as of ${fmtClock(d.now_utc)}`;
   document.getElementById("clock").textContent = fmtClock(d.now_utc);
 
@@ -77,18 +103,18 @@ async function loadLive() {
 
   const g = context => {
     const grad = context.chart.ctx.createLinearGradient(0, 0, 0, 280);
-    grad.addColorStop(0, "rgba(91,140,255,.35)");
-    grad.addColorStop(1, "rgba(91,140,255,0)");
+    grad.addColorStop(0, `rgba(${THEME.accentRgb},.35)`);
+    grad.addColorStop(1, `rgba(${THEME.accentRgb},0)`);
     return grad;
   };
   makeChart("liveChart", {
     type: "line",
     data: { labels, datasets: [
-      { label: "Today", data: todayVals, borderColor: "#5b8cff", backgroundColor: g, fill: true, tension: .4, pointRadius: 0, borderWidth: 2.5 },
-      { label: "Yesterday", data: yestVals, borderColor: GRAY, borderDash: [5, 5], fill: false, tension: .4, pointRadius: 0, borderWidth: 1.5 },
+      { label: "Today", data: todayVals, borderColor: THEME.palette[0], backgroundColor: g, fill: true, tension: .4, pointRadius: 0, borderWidth: 2.5 },
+      { label: "Yesterday", data: yestVals, borderColor: THEME.muted, borderDash: [5, 5], fill: false, tension: .4, pointRadius: 0, borderWidth: 1.5 },
     ]},
     options: { responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: GRAY, boxWidth: 10, usePointStyle: true } } },
+      plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, usePointStyle: true } } },
       scales: baseScales("aircraft / hour") },
   });
 
@@ -112,10 +138,10 @@ function doughnut(id, centerId, labels, values, unit) {
   if (center) center.innerHTML = `<div>${total}</div><div style="font-size:11px">${unit}</div>`;
   makeChart(id, {
     type: "doughnut",
-    data: { labels, datasets: [{ data: values, backgroundColor: PALETTE.slice(0, labels.length),
+    data: { labels, datasets: [{ data: values, backgroundColor: THEME.palette.slice(0, labels.length),
       borderWidth: 0, hoverOffset: 6 }] },
     options: { responsive: true, maintainAspectRatio: false, cutout: "68%",
-      plugins: { legend: { position: "bottom", labels: { color: GRAY, boxWidth: 8, font: { size: 10 } } } } },
+      plugins: { legend: { position: "bottom", labels: { color: THEME.muted, boxWidth: 8, font: { size: 10 } } } } },
   });
 }
 
@@ -123,6 +149,11 @@ function doughnut(id, centerId, labels, values, unit) {
 
 async function loadPatterns() {
   const d = await (await fetch("/api/patterns")).json();
+  CACHE.patterns = d;
+  renderPatterns(d);
+}
+
+function renderPatterns(d) {
 
   // 7-day overlay
   const overlay = d.overlay || [];
@@ -132,9 +163,9 @@ async function loadPatterns() {
     return {
       label: day.date.slice(5) + " " + day.weekday,
       data: labels.map((_, h) => m[h] ?? null),
-      borderColor: PALETTE[i % PALETTE.length],
+      borderColor: THEME.palette[i % THEME.palette.length],
       borderWidth: i === overlay.length - 1 ? 3 : 1.5,
-      backgroundColor: i === overlay.length - 1 ? "rgba(91,140,255,.08)" : "transparent",
+      backgroundColor: i === overlay.length - 1 ? `rgba(${THEME.accentRgb},.08)` : "transparent",
       fill: i === overlay.length - 1,
       pointRadius: 0, tension: .35,
     };
@@ -143,7 +174,7 @@ async function loadPatterns() {
     type: "line",
     data: { labels, datasets },
     options: { responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+      plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } } },
       scales: baseScales("aircraft") },
   });
 
@@ -163,7 +194,7 @@ async function loadPatterns() {
     type: "bar",
     data: { labels: sorted.map(s => s.weekday + (s.today ? " •" : "")),
       datasets: [{ data: sorted.map(s => s.mean_total),
-        backgroundColor: sorted.map(s => s.today ? "#8f6bff" : "rgba(91,140,255,.55)"),
+        backgroundColor: sorted.map(s => s.today ? THEME.palette[1] : `rgba(${THEME.accentRgb},.55)`),
         borderRadius: 6, borderSkipped: false }] },
     options: { responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } }, scales: baseScales("flights/day") },
@@ -176,7 +207,7 @@ async function loadPatterns() {
     type: "bar",
     data: { labels: hp.map(r => r.hour),
       datasets: [{ data: hp.map(r => r.mean),
-        backgroundColor: hp.map(r => r.hour === nowH ? "rgba(52,211,153,.9)" : "rgba(143,107,255,.45)"),
+        backgroundColor: hp.map(r => r.hour === nowH ? `rgba(${THEME.greenRgb},.9)` : `rgba(${THEME.accent2Rgb},.45)`),
         borderRadius: 4, borderSkipped: false }] },
     options: { responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } }, scales: baseScales("avg aircraft") },
@@ -205,6 +236,11 @@ function renderAnomalies(anomalies) {
 
 async function loadForecasts() {
   const d = await (await fetch("/api/forecasts")).json();
+  CACHE.forecasts = d;
+  renderForecasts(d);
+}
+
+function renderForecasts(d) {
 
   // h=1 actual vs predicted
   const names = Object.keys(d.h1_history || {});
@@ -217,19 +253,19 @@ async function loadForecasts() {
     datasets.push({
       label: "pred · " + n.replace("flight-traffic-", ""),
       data: series[n].map(p => p.pred),
-      borderColor: PALETTE[i % PALETTE.length], tension: .25, pointRadius: 0, borderWidth: 2,
+      borderColor: THEME.palette[i % THEME.palette.length], tension: .25, pointRadius: 0, borderWidth: 2,
     });
   });
   datasets.push({
     label: "actual", data: sample.map(p => p.actual ?? null),
-    borderColor: "#f87171", borderDash: [6, 4], pointRadius: 2, tension: .3,
+    borderColor: THEME.palette[6], borderDash: [6, 4], pointRadius: 2, tension: .3,
   });
   if (datasets.length) {
     makeChart("fcChart", {
       type: "line",
       data: { labels, datasets },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+        plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } } },
         scales: baseScales("aircraft") },
     });
   }
@@ -240,16 +276,16 @@ async function loadForecasts() {
   const oLabels = hours;
   const oDatasets = Object.entries(lm).map(([n, m], i) => ({
     label: n.replace("flight-traffic-", ""),
-    data: m.series, borderColor: PALETTE[i % PALETTE.length],
+    data: m.series, borderColor: THEME.palette[i % THEME.palette.length],
     tension: .3, pointRadius: 3, borderWidth: 2.5,
-    backgroundColor: "rgba(91,140,255,.05)", fill: i === 0,
+    backgroundColor: `rgba(${THEME.accentRgb},.05)`, fill: i === 0,
   }));
   if (oDatasets.length) {
     makeChart("outlookChart", {
       type: "line",
       data: { labels: oLabels, datasets: oDatasets },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: GRAY, boxWidth: 10, font: { size: 10 } } } },
+        plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } } },
         scales: baseScales("predicted aircraft") },
     });
   }
@@ -266,6 +302,11 @@ async function loadForecasts() {
 
 async function loadHealth() {
   const d = await (await fetch("/api/health")).json();
+  CACHE.health = d;
+  renderHealth(d);
+}
+
+function renderHealth(d) {
   const pill = document.getElementById("status-pill");
   const fresh = d.data_freshness_min;
   if (fresh === null) { pill.textContent = "no data today"; pill.className = "status-pill bad"; }
@@ -304,10 +345,76 @@ function countUp(id, target) {
   requestAnimationFrame(tick);
 }
 
+/* ---------------- theme ---------------- */
+
+const THEME_KEY = "aeroflow-theme";
+
+function savedTheme() {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return (t === "light" || t === "dark") ? t : null;
+  } catch (e) {
+    return null;  // storage blocked (private mode / embedded webview)
+  }
+}
+
+/* The inline <head> script sets data-theme before first paint; this syncs the
+   button to it and wires up switching. */
+function applyTheme(name) {
+  document.documentElement.setAttribute("data-theme", name);
+  THEME = readTheme();
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    // Icon shows the mode the button switches TO, not the current one
+    btn.textContent = name === "light" ? "☾" : "☀";
+    btn.setAttribute(
+      "aria-label",
+      name === "light" ? "Switch to dark theme" : "Switch to light theme",
+    );
+    btn.title = btn.getAttribute("aria-label");
+  }
+}
+
+/* Re-render every chart from the last good payload, using the current theme.
+   No network: a theme switch must always be visually complete. */
+function rerenderFromCache() {
+  if (CACHE.live) renderLive(CACHE.live);
+  if (CACHE.patterns) renderPatterns(CACHE.patterns);
+  if (CACHE.forecasts) renderForecasts(CACHE.forecasts);
+  if (CACHE.health) renderHealth(CACHE.health);
+}
+
+function initTheme() {
+  applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
+
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      const next =
+        document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+      try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* non-fatal */ }
+      applyTheme(next);
+      rerenderFromCache();  // instant, theme-correct repaint
+      refresh();            // then pull fresh data
+    });
+  }
+
+  // Track OS changes only while the visitor hasn't made an explicit choice
+  const mq = window.matchMedia("(prefers-color-scheme: light)");
+  const onSysChange = (e) => {
+    if (savedTheme()) return;
+    applyTheme(e.matches ? "light" : "dark");
+    rerenderFromCache();
+    refresh();
+  };
+  if (mq.addEventListener) mq.addEventListener("change", onSysChange);
+  else if (mq.addListener) mq.addListener(onSysChange);  // older Safari
+}
+
 /* ---------------- loop ---------------- */
 
-// Chart.js loads from CDN; wait until it is available before first paint
-// so the initial refresh doesn't race the network and blank the dashboard.
+// Chart.js is self-hosted, but wait for the global to be defined before the
+// first paint so the initial refresh can't race the script and blank the page.
 function whenChartLib(timeoutMs = 15000) {
   return new Promise((resolve) => {
     if (typeof Chart !== "undefined") return resolve(true);
@@ -326,6 +433,7 @@ async function refresh() {
   refreshInFlight = true;
   try {
     await whenChartLib();
+    THEME = readTheme();
     // run each loader independently so a single failure doesn't blank all
     const results = await Promise.allSettled([
       loadLive(), loadPatterns(), loadForecasts(), loadHealth(),
@@ -342,5 +450,6 @@ async function refresh() {
   }
 }
 
+initTheme();
 refresh();
 setInterval(refresh, 60000);

@@ -4,10 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aeroflow · Mumbai Airspace</title>
-  <script src="/static/chart.umd.min.js?v=9"></script>
+  <script>
+    /* Set the theme before first paint so a light-mode visitor never sees a
+       flash of the dark palette. Saved choice wins; otherwise follow the OS. */
+    (function () {
+      var t;
+      try {
+        var saved = localStorage.getItem("aeroflow-theme");
+        t = (saved === "light" || saved === "dark") ? saved
+          : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch (e) {
+        t = "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
+  <script src="/static/chart.umd.min.js?v=13"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -23,6 +38,8 @@
     <div class="header-right">
       <div class="status-pill" id="status-pill">…</div>
       <div class="clock mono" id="clock">–</div>
+      <button class="theme-toggle" id="theme-toggle" type="button"
+              aria-label="Switch theme" title="Switch light/dark">☀</button>
     </div>
   </header>
 
@@ -133,6 +150,6 @@
     <span>auto-refresh 60s</span>
   </footer>
 
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>
