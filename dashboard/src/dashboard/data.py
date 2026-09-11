@@ -428,30 +428,49 @@ def patterns_snapshot() -> dict:
     return _cached("patterns", load)
 
 
+def _parse_utc(value: str) -> datetime:
+    """Parse an ISO timestamp, treating a missing offset as UTC.
+
+    fromisoformat() returns a naive datetime for offset-less strings, and
+    .astimezone() would then assume local time -- wrong on any non-UTC host.
+    """
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _load_complete_actuals(start: date, end: date) -> dict[str, float]:
+    """{canonical hour: flight_count} for COMPLETE hours in [start, end].
+
+    The current UTC hour is still being ingested, so its count is partial.
+    Including it would make the accuracy line dip and unfairly penalise the
+    forecast, so only finished hours are returned.
+    """
+    store = S3Store()
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    actuals: dict[str, float] = {}
+    day = start
+    while day <= end:
+        df = store._day_hourly(day)
+        if df is not None and not df.is_empty():
+            for r in df.iter_rows(named=True):
+                hour = r["hour_start"]
+                if hour.tzinfo is None:
+                    hour = hour.replace(tzinfo=timezone.utc)
+                if hour >= current_hour:
+                    continue
+                actuals[_hour_key(hour)] = float(r["flight_count"])
+        day += timedelta(days=1)
+    return actuals
+
+
 def forecasts_snapshot() -> dict:
     store = S3Store()
 
     def load():
         files = store.forecast_files()
         latest_fc = store.read_forecast(files[-1]) if files else None
-
-        actuals: dict[str, float] = {}
-        # The current UTC hour is still being ingested, so its count is partial.
-        # Treating it as a final actual would make the accuracy line dip and
-        # unfairly penalise the forecast; only score COMPLETE hours.
-        current_hour = datetime.now(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        for dt in recent_raw_days(2):
-            df = store._day_hourly(dt)
-            if df is not None and not df.is_empty():
-                for r in df.iter_rows(named=True):
-                    hour = r["hour_start"]
-                    if hour.tzinfo is None:
-                        hour = hour.replace(tzinfo=timezone.utc)
-                    if hour >= current_hour:
-                        continue
-                    actuals[_hour_key(hour)] = float(r["flight_count"])
 
         model_h1: dict[str, list] = defaultdict(list)
         for fkey in files:
@@ -462,14 +481,10 @@ def forecasts_snapshot() -> dict:
             for name, m in fc["models"].items():
                 h1 = m.get("hourly")
                 if h1:
-                    target = h1["hour_start"]
                     model_h1[name].append({
-                        "target": target,
+                        "target": h1["hour_start"],
                         "pred": round(float(h1["predicted_flight_count"])),
-                        "actual": (
-                            round(a) if (a := actuals.get(_hour_key(target))) is not None
-                            else None
-                        ),
+                        "actual": None,
                         "generated": generated,
                     })
 
@@ -488,6 +503,21 @@ def forecasts_snapshot() -> dict:
         # archive contains history from the retired A/B model
         # (flight-traffic-forecaster); plotting it would imply it still runs.
         active_models = set(latest_fc.get("models", {})) if latest_fc else set()
+        model_h1 = {n: v for n, v in model_h1.items() if n in active_models}
+
+        # Load actuals spanning exactly the hours we display. Using a fixed
+        # 2-day window left every older point without an actual (63 of 101),
+        # so the accuracy line only covered the tail of the chart.
+        targets = [r["target"] for rows in model_h1.values() for r in rows]
+        if targets:
+            parsed = [_parse_utc(t) for t in targets]
+            actuals = _load_complete_actuals(
+                min(parsed).date(), max(parsed).date()
+            )
+            for rows in model_h1.values():
+                for r in rows:
+                    a = actuals.get(_hour_key(r["target"]))
+                    r["actual"] = round(a) if a is not None else None
 
         return {
             "latest_generated": latest_fc["generated_at"] if latest_fc else None,
@@ -506,7 +536,7 @@ def forecasts_snapshot() -> dict:
                 }
                 if latest_fc and "models" in latest_fc else {}
             ),
-            "h1_history": {n: v for n, v in model_h1.items() if n in active_models},
+            "h1_history": model_h1,
             "num_forecasts": len(files),
         }
 

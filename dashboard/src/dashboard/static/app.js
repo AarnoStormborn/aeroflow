@@ -261,18 +261,26 @@ function renderForecasts(d) {
   const sample = names.length ? series[names[0]] : [];
   // Targets are ISO strings; show "MM-DD HH:00" (the T separator reads oddly)
   const labels = sample.map(p => p.target.slice(5, 10) + " " + p.target.slice(11, 16));
+  // Warm colours for predictions so they never collide with the blue actuals.
+  const PRED_COLORS = [THEME.palette[6], THEME.palette[3], THEME.palette[4]];
+  // Align every series to the same target hours so the actuals line and the
+  // prediction line share one x-axis (models can have different histories).
+  const actualByTarget = Object.fromEntries(sample.map(p => [p.target, p.actual ?? null]));
   const datasets = [];
   names.forEach((n, i) => {
+    const predByTarget = Object.fromEntries(series[n].map(p => [p.target, p.pred]));
     datasets.push({
       label: "pred · " + n.replace("flight-traffic-", ""),
-      data: series[n].map(p => p.pred),
-      borderColor: THEME.palette[i % THEME.palette.length], tension: .25, pointRadius: 0, borderWidth: 2,
+      data: sample.map(p => predByTarget[p.target] ?? null),
+      borderColor: PRED_COLORS[i % PRED_COLORS.length], borderDash: [6, 4],
+      borderWidth: 2, pointRadius: 0, tension: .25,
     });
   });
+  // Actuals are ground truth: solid BLUE. Predictions are dashed RED.
   datasets.push({
-    label: "actual", data: sample.map(p => p.actual ?? null),
-    borderColor: THEME.palette[6], borderDash: [6, 4],
-    pointRadius: 2.5, pointBackgroundColor: THEME.palette[6],
+    label: "actual", data: sample.map(p => actualByTarget[p.target] ?? null),
+    borderColor: THEME.palette[0], borderWidth: 2.5,
+    pointRadius: 2, pointBackgroundColor: THEME.palette[0],
     spanGaps: false, tension: .3,
   });
   if (datasets.length) {
