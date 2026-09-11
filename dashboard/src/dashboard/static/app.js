@@ -273,14 +273,20 @@ function renderForecasts(d) {
       label: "pred · " + n.replace("flight-traffic-", ""),
       data: sample.map(p => predByTarget[p.target] ?? null),
       borderColor: PRED_COLORS[i % PRED_COLORS.length], borderDash: [6, 4],
-      borderWidth: 2, pointRadius: 0, tension: .25,
+      borderWidth: 2, tension: .25,
+      // Dotted markers on each predicted hour, matching the line colour
+      pointStyle: "circle", pointRadius: 2.5, pointHoverRadius: 4,
+      pointBackgroundColor: PRED_COLORS[i % PRED_COLORS.length],
+      pointBorderColor: "transparent",
     });
   });
-  // Actuals are ground truth: solid BLUE. Predictions are dashed RED.
+  // Actuals are ground truth: a clean solid BLUE line. Its per-point dots are
+  // hidden (hover-only) so the dotted markers clearly read as "predicted".
   datasets.push({
     label: "actual", data: sample.map(p => actualByTarget[p.target] ?? null),
     borderColor: THEME.palette[0], borderWidth: 2.5,
-    pointRadius: 2, pointBackgroundColor: THEME.palette[0],
+    pointRadius: 0, pointHoverRadius: 4,
+    pointBackgroundColor: THEME.palette[0],
     spanGaps: false, tension: .3,
   });
   if (datasets.length) {
