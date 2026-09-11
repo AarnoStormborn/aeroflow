@@ -82,6 +82,18 @@ function renderLive(d) {
   countUp("today-peak", Math.round(peak));
   countUp("today-avg", Math.round(avgToday));
 
+  // "Aircraft now" is a single OpenSky poll, not an hourly average, so state
+  // the snapshot age explicitly instead of implying a running total.
+  const cap = document.getElementById("active-caption");
+  if (cap) {
+    const at = d.active_captured_at ? new Date(d.active_captured_at) : null;
+    const ageMin = at ? Math.round((Date.now() - at.getTime()) / 60000) : null;
+    cap.innerHTML = (ageMin === null)
+      ? "instant snapshot"
+      : `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
+    if (at) cap.title = `Instantaneous count from the ${fmtClock(d.active_captured_at)} UTC satellite poll`;
+  }
+
   // vs yesterday (compare same elapsed hours)
   const yestMap = Object.fromEntries(yest.map(r => [r.hour, r.count]));
   const pairs = today.filter(r => r.hour in yestMap && yestMap[r.hour] > 0);
@@ -247,7 +259,8 @@ function renderForecasts(d) {
   const series = {};
   for (const n of names) series[n] = d.h1_history[n].slice(-60);
   const sample = names.length ? series[names[0]] : [];
-  const labels = sample.map(p => p.target.slice(5, 16));
+  // Targets are ISO strings; show "MM-DD HH:00" (the T separator reads oddly)
+  const labels = sample.map(p => p.target.slice(5, 10) + " " + p.target.slice(11, 16));
   const datasets = [];
   names.forEach((n, i) => {
     datasets.push({
@@ -258,14 +271,19 @@ function renderForecasts(d) {
   });
   datasets.push({
     label: "actual", data: sample.map(p => p.actual ?? null),
-    borderColor: THEME.palette[6], borderDash: [6, 4], pointRadius: 2, tension: .3,
+    borderColor: THEME.palette[6], borderDash: [6, 4],
+    pointRadius: 2.5, pointBackgroundColor: THEME.palette[6],
+    spanGaps: false, tension: .3,
   });
   if (datasets.length) {
     makeChart("fcChart", {
       type: "line",
       data: { labels, datasets },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } } },
+        plugins: {
+          legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y} aircraft` } },
+        },
         scales: baseScales("aircraft") },
     });
   }
@@ -285,7 +303,10 @@ function renderForecasts(d) {
       type: "line",
       data: { labels: oLabels, datasets: oDatasets },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } } },
+        plugins: {
+          legend: { labels: { color: THEME.muted, boxWidth: 10, font: { size: 10 } } },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y} aircraft` } },
+        },
         scales: baseScales("predicted aircraft") },
     });
   }

@@ -105,6 +105,34 @@ class S3Store:
 
         return _cached(f"day_hourly:{dt.isoformat()}", load, ttl=ttl)
 
+    def latest_snapshot(self) -> dict:
+        """Aircraft visible in the most recent raw snapshot, and its timestamp.
+
+        Each raw parquet file is a single OpenSky poll (exactly one
+        capture_time), so this count is an INSTANTANEOUS observation, not an
+        hourly aggregate. Returns {} when no snapshot is available.
+        """
+        today = datetime.now(timezone.utc).date()
+
+        def load():
+            files = self.list_raw_files(today)
+            if not files:
+                files = self.list_raw_files(today - timedelta(days=1))
+            if not files:
+                return {}
+            df = self.read_parquet(files[-1])
+            if df is None or df.is_empty() or "capture_time" not in df.columns:
+                return {}
+            captured = df["capture_time"].max()
+            return {
+                "count": int(df["icao24"].n_unique()),
+                "captured_at": datetime.fromtimestamp(
+                    int(captured), timezone.utc
+                ).isoformat(),
+            }
+
+        return _cached("latest_snapshot", load, ttl=30.0)
+
     def latest_ticks(self, n: int = LIVE_TICKS) -> pl.DataFrame:
         """Combine the most recent raw snapshots (across today, falling back
         to yesterday if today has none yet)."""
@@ -177,6 +205,25 @@ class S3Store:
             return None
 
 
+def _hour_key(value: object) -> str:
+    """Canonical hour key so forecasts and actuals can be joined.
+
+    The parquet actuals carry NAIVE datetimes (polars reads hour_start with
+    time_zone=None) while forecast JSON stores tz-aware ISO strings
+    ("2026-09-11T13:00:00+00:00"). Keying both through this function makes the
+    two match; without it every actual lookup misses and the forecast charts
+    show no actuals at all.
+    """
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if isinstance(value, datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    if isinstance(value, datetime):
+        value = value.astimezone(timezone.utc)
+        return value.strftime("%Y-%m-%dT%H:%M")
+    return str(value)
+
+
 def recent_raw_days(days: int = 10) -> list[date]:
     today = datetime.now(timezone.utc).date()
     return [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
@@ -217,10 +264,7 @@ def live_snapshot() -> dict:
                 for r in (df.iter_rows(named=True) if df is not None and not df.is_empty() else [])
             ]
 
-        active = (
-            int(today_df["active_now"].max())
-            if today_df is not None and not today_df.is_empty() else 0
-        )
+        active = store.latest_snapshot()
 
         # Live breakdown from latest ticks
         ticks = store.latest_ticks()
@@ -228,7 +272,9 @@ def live_snapshot() -> dict:
 
         return {
             "now_utc": datetime.now(timezone.utc).isoformat(),
-            "active_aircraft_now": active,
+            # Instantaneous count from the newest poll (not an hourly average)
+            "active_aircraft_now": active.get("count", 0),
+            "active_captured_at": active.get("captured_at"),
             "today": series(today_df),
             "yesterday": series(yest_df),
             "breakdown": breakdown,
@@ -390,25 +436,53 @@ def forecasts_snapshot() -> dict:
         latest_fc = store.read_forecast(files[-1]) if files else None
 
         actuals: dict[str, float] = {}
+        # The current UTC hour is still being ingested, so its count is partial.
+        # Treating it as a final actual would make the accuracy line dip and
+        # unfairly penalise the forecast; only score COMPLETE hours.
+        current_hour = datetime.now(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
         for dt in recent_raw_days(2):
             df = store._day_hourly(dt)
             if df is not None and not df.is_empty():
                 for r in df.iter_rows(named=True):
-                    actuals[r["hour_start"].isoformat()] = float(r["flight_count"])
+                    hour = r["hour_start"]
+                    if hour.tzinfo is None:
+                        hour = hour.replace(tzinfo=timezone.utc)
+                    if hour >= current_hour:
+                        continue
+                    actuals[_hour_key(hour)] = float(r["flight_count"])
 
         model_h1: dict[str, list] = defaultdict(list)
         for fkey in files:
             fc = store.read_forecast(fkey)
             if not fc or "models" not in fc:
                 continue
+            generated = fc.get("generated_at", "")
             for name, m in fc["models"].items():
                 h1 = m.get("hourly")
                 if h1:
+                    target = h1["hour_start"]
                     model_h1[name].append({
-                        "target": h1["hour_start"],
-                        "pred": round(float(h1["predicted_flight_count"]), 1),
-                        "actual": actuals.get(h1["hour_start"]),
+                        "target": target,
+                        "pred": round(float(h1["predicted_flight_count"])),
+                        "actual": (
+                            round(a) if (a := actuals.get(_hour_key(target))) is not None
+                            else None
+                        ),
+                        "generated": generated,
                     })
+
+        # Several forecast runs can target the same hour (when the last actual
+        # hour hasn't advanced between runs), which would repeat x-axis labels
+        # and zig-zag the line. Keep the most recent prediction per target hour.
+        model_h1 = {
+            name: sorted(
+                {row["target"]: row for row in rows}.values(),
+                key=lambda r: r["target"],
+            )
+            for name, rows in model_h1.items()
+        }
 
         # Only report accuracy for models that are still being served. The
         # archive contains history from the retired A/B model
@@ -420,8 +494,10 @@ def forecasts_snapshot() -> dict:
             "latest_models": (
                 {
                     n: {
-                        "h1": m["hourly"]["predicted_flight_count"],
-                        "series": [p["predicted_flight_count"] for p in m["quarter_daily"]],
+                        "h1": round(m["hourly"]["predicted_flight_count"]),
+                        "series": [
+                            round(p["predicted_flight_count"]) for p in m["quarter_daily"]
+                        ],
                         "hours": [p["hour_start"][11:16] for p in m["quarter_daily"]],
                         # Registered version that produced this forecast (provenance)
                         "version": m.get("model_version"),

@@ -212,6 +212,9 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 table.coverage { width: 100%; border-collapse: collapse; font-size: 12px; }
 table.coverage th { color: var(--muted); font-weight: 600; padding: 4px 8px; text-align: center; }
 table.coverage td { padding: 3px 8px; text-align: center; }
+/* The date column is left-aligned in the body, so its header must be too --
+   otherwise "date" sits centred above a left-aligned column. */
+table.coverage tr th:first-child { text-align: left; }
 table.coverage tr td:first-child { text-align: left; color: var(--muted); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .dot.yes { background: var(--green); box-shadow: 0 0 6px rgba(var(--green-rgb), .6); }
