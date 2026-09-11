@@ -46,6 +46,9 @@ function makeChart(id, cfg) {
   charts[id] = null;
   const c = new Chart(ctx, cfg);
   charts[id] = c;
+  // A rendered chart retires its loading skeleton.
+  const wrap = el.closest(".chart-wrap");
+  if (wrap) wrap.classList.add("loaded");
   return c;
 }
 
@@ -447,6 +450,55 @@ function initTheme() {
   else if (mq.addListener) mq.addListener(onSysChange);  // older Safari
 }
 
+/* ---------------- browser-side cache ----------------
+
+   Server-side is now fast, but a scaled-to-zero Modal container costs ~9s of
+   cold start on the next visit. So the last good payloads are kept in
+   localStorage and re-rendered immediately on load: the dashboard paints
+   instantly from cache, then refreshes in the background and updates in place.
+   The same store also lets a load skip refetching entirely when the cached data
+   is still fresh, which reduces Modal invocations rather than just hiding them.
+*/
+
+const STORE_KEY = "aeroflow-payloads";
+const STORE_VERSION = 1;        // bump to discard caches from an older payload shape
+const STORE_FRESH_MS = 150000;  // skip the initial refetch if cache is this fresh
+const STORE_MAX_MS = 6 * 3600 * 1000;  // beyond this, paint fresh instead of stale
+
+function saveCache() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      v: STORE_VERSION, ts: Date.now(),
+      live: CACHE.live, patterns: CACHE.patterns,
+      forecasts: CACHE.forecasts, health: CACHE.health,
+    }));
+  } catch (e) {
+    /* quota or private mode: caching is an optimisation, never a requirement */
+  }
+}
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || o.v !== STORE_VERSION || !o.ts) return null;
+    if (Date.now() - o.ts > STORE_MAX_MS) return null;
+    // Require a complete set, otherwise treat as a miss and refetch.
+    if (!o.live || !o.patterns || !o.forecasts || !o.health) return null;
+    return o;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* ---------------- loading indicators ---------------- */
+
+function setRefreshing(on) {
+  const sp = document.getElementById("spinner");
+  if (sp) sp.hidden = !on;
+}
+
 /* ---------------- loop ---------------- */
 
 // Chart.js is self-hosted, but wait for the global to be defined before the
@@ -467,6 +519,7 @@ let refreshInFlight = false;
 async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
+  setRefreshing(true);
   try {
     await whenChartLib();
     THEME = readTheme();
@@ -475,14 +528,22 @@ async function refresh() {
       loadLive(), loadPatterns(), loadForecasts(), loadHealth(),
     ]);
     for (const r of results) if (r.status === "rejected") console.error(r.reason);
+    // Only persist a COMPLETE set. A partial cache could later be treated as
+    // fresh and skip the refetch, leaving some panels permanently empty.
+    const allLoaded = results.every((r) => r.status === "fulfilled");
+    if (allLoaded) saveCache();
     document.getElementById("foot-updated").textContent =
       "updated " + fmtClock(new Date().toISOString());
   } catch (e) {
     console.error(e);
-    const pill = document.getElementById("status-pill");
-    pill.textContent = "load error"; pill.className = "status-pill bad";
+    // Only surface a hard failure if there is nothing cached to show.
+    if (!CACHE.live && !CACHE.forecasts) {
+      const pill = document.getElementById("status-pill");
+      pill.textContent = "load error"; pill.className = "status-pill bad";
+    }
   } finally {
     refreshInFlight = false;
+    setRefreshing(false);
   }
 }
 
@@ -502,8 +563,35 @@ function tickLocal() {
   }
 }
 
+/* Paint immediately from the last good payloads (if any), then refresh.
+   `await whenChartLib()` first, so charts exist before the cached data lands. */
+async function bootstrap() {
+  const cached = loadCache();
+
+  if (cached) {
+    CACHE.live = cached.live;
+    CACHE.patterns = cached.patterns;
+    CACHE.forecasts = cached.forecasts;
+    CACHE.health = cached.health;
+
+    await whenChartLib();
+    THEME = readTheme();
+    rerenderFromCache();
+    tickLocal();
+
+    const ageMin = Math.round((Date.now() - cached.ts) / 60000);
+    document.getElementById("foot-updated").textContent =
+      ageMin <= 0 ? "updated just now" : `updated ${ageMin}m ago (cached)`;
+
+    // Cache still fresh for this poll interval? Then skip the network entirely.
+    if (Date.now() - cached.ts < STORE_FRESH_MS) return;
+  }
+
+  refresh();
+}
+
 initTheme();
-refresh();
+bootstrap();
 tickLocal();
 // Data is ingested every 15 min, so polling every 60s was 15x more requests
 // than the data could possibly justify -- each one re-reading S3 and running

@@ -19,10 +19,10 @@
       document.documentElement.setAttribute("data-theme", t);
     })();
   </script>
-  <script src="/static/chart.umd.min.js?v=17"></script>
+  <script src="/static/chart.umd.min.js?v=19"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=17">
+  <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -73,24 +73,32 @@
       <h2>Today's traffic</h2>
       <span class="panel-sub" id="live-sub">–</span>
     </div>
-    <div class="chart-wrap"><canvas id="liveChart"></canvas></div>
+    <div class="chart-wrap"><canvas id="liveChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
   </section>
 
   <!-- Breakdown row: doughnuts + altitude -->
   <section class="row-3">
     <div class="panel">
       <div class="panel-head"><h2>Aircraft by origin</h2></div>
-      <div class="chart-wrap donut"><canvas id="countryChart"></canvas></div>
+      <div class="chart-wrap donut"><canvas id="countryChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
       <div class="donut-center" id="country-total">–</div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>By airline</h2></div>
-      <div class="chart-wrap donut"><canvas id="airlineChart"></canvas></div>
+      <div class="chart-wrap donut"><canvas id="airlineChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
       <div class="donut-center" id="airline-total">–</div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>By altitude band</h2></div>
-      <div class="chart-wrap donut"><canvas id="altChart"></canvas></div>
+      <div class="chart-wrap donut"><canvas id="altChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
       <div class="donut-center" id="alt-total">–</div>
     </div>
   </section>
@@ -99,11 +107,15 @@
   <section class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>Last 7 days — hourly shape</h2></div>
-      <div class="chart-wrap tall"><canvas id="weekChart"></canvas></div>
+      <div class="chart-wrap tall"><canvas id="weekChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Traffic by time of day</h2></div>
-      <div class="chart-wrap tall"><canvas id="daypartChart"></canvas></div>
+      <div class="chart-wrap tall"><canvas id="daypartChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
     </div>
   </section>
 
@@ -111,11 +123,15 @@
   <section class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>Average by weekday</h2></div>
-      <div class="chart-wrap"><canvas id="weekdayChart"></canvas></div>
+      <div class="chart-wrap"><canvas id="weekdayChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Hour-of-day profile</h2></div>
-      <div class="chart-wrap"><canvas id="hourChart"></canvas></div>
+      <div class="chart-wrap"><canvas id="hourChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
     </div>
   </section>
 
@@ -129,11 +145,15 @@
   <section class="grid-2">
     <div class="panel">
       <div class="panel-head"><h2>Forecast accuracy — next-hour (h=1)</h2></div>
-      <div class="chart-wrap tall"><canvas id="fcChart"></canvas></div>
+      <div class="chart-wrap tall"><canvas id="fcChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>Latest 6-hour outlook</h2></div>
-      <div class="chart-wrap tall"><canvas id="outlookChart"></canvas></div>
+      <div class="chart-wrap tall"><canvas id="outlookChart"></canvas>
+      <div class="skeleton" aria-hidden="true"></div>
+    </div>
       <div class="outlook-meta" id="outlook-meta"></div>
     </div>
   </section>
@@ -146,10 +166,11 @@
 
   <footer>
     <span class="mono" id="foot-updated">–</span>
+    <span class="spinner" id="spinner" hidden></span>
     <span class="dotpulse"></span>
     <span>auto-refresh 3m</span>
   </footer>
 
-  <script src="/static/app.js?v=17"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>
