@@ -26,8 +26,11 @@ instead of carrying their own hardcoded palette.
 
 Two deliberate details, both worth preserving:
 
-- An inline script in `<head>` sets `data-theme` before first paint, so a
-  light-mode visitor never sees a flash of the dark palette.
+- The theme bootstrap lives in `static/theme.js`, loaded as a **blocking**
+  `<script src>` in `<head>` (not `defer`), so it sets `data-theme` before first
+  paint and a light-mode visitor never sees a flash of the dark palette. It is a
+  separate file rather than an inline block so the CSP can be `script-src 'self'`
+  with no `'unsafe-inline'`.
 - Theme switching does **not** cross-fade. Transitioning foreground and
   background together makes them interpolate through mid-grey, collapsing text
   contrast to ~1.1:1 mid-switch. The swap is instant and therefore always
@@ -36,6 +39,27 @@ Two deliberate details, both worth preserving:
 On theme change, charts are re-rendered from the last good payload held in the
 `CACHE` object rather than refetched, so a slow or failing request can't leave
 some charts painted in the previous theme.
+
+## Security headers
+
+Every response carries a strict CSP plus the usual hardening headers — see
+`_SECURITY_HEADERS` in `app.py`: `script-src 'self'` with no `'unsafe-inline'`,
+`frame-ancestors 'none'` and `X-Frame-Options: DENY`, `X-Content-Type-Options`,
+`Referrer-Policy`, `Permissions-Policy`, HSTS and `Cross-Origin-Opener-Policy`.
+
+Two constraints this imposes on the frontend, both enforced by tests:
+
+- **No inline `<script>`** — a single inline block would force `'unsafe-inline'`
+  back into `script-src`, which is why the theme bootstrap is its own file.
+- **No inline `style="..."` attributes**, in markup *or* in templates rendered
+  through `innerHTML`. CSP's `style-src-attr` blocks those and the failure is
+  **silent**: the element still renders, just unstyled. Use classes instead
+  (`.donut-center .dc-unit`, `.anomaly .pct.up/.down`). Setting `element.style.x`
+  from JS is fine — CSSOM mutation is not covered by CSP.
+
+The only permitted external origin is Google Fonts (`style-src` for the
+stylesheet, `font-src` for the font files). If it is unreachable the page falls
+back to system fonts.
 
 ## Cost model
 

@@ -151,7 +151,7 @@ function renderBreakdown(b) {
 function doughnut(id, centerId, labels, values, unit) {
   const center = document.getElementById(centerId);
   const total = values.reduce((a, b) => a + b, 0);
-  if (center) center.innerHTML = `<div>${total}</div><div style="font-size:11px">${unit}</div>`;
+  if (center) center.innerHTML = `<div>${total}</div><div class="dc-unit">${unit}</div>`;
   makeChart(id, {
     type: "doughnut",
     data: { labels, datasets: [{ data: values, backgroundColor: THEME.palette.slice(0, labels.length),
@@ -235,14 +235,15 @@ function renderPatterns(d) {
 
 function renderAnomalies(anomalies) {
   const panel = document.getElementById("anomalies-panel");
-  if (!anomalies.length) { panel.style.display = "none"; return; }
-  panel.style.display = "";
+  // Toggle a class rather than an inline style, so CSP needs no 'unsafe-inline'
+  if (!anomalies.length) { panel.classList.add("hidden"); return; }
+  panel.classList.remove("hidden");
   document.getElementById("anomalies-body").innerHTML = anomalies.map(a => {
     const up = a.deviation_pct > 0;
     return `<div class="anomaly ${up ? "up" : ""}">
       <span class="date">${a.date}</span>
       <span class="detail">avg <b>${a.mean}</b> flights vs trailing-week <b>${a.trail_mean}</b></span>
-      <span class="pct" style="color:${up ? "var(--amber)" : "var(--red)"}">
+      <span class="pct ${up ? "up" : "down"}">
         ${up ? "▲" : "▼"} ${Math.abs(a.deviation_pct).toFixed(1)}%</span>
     </div>`;
   }).join("");

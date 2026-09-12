@@ -18,15 +18,52 @@ app = FastAPI(title="Aeroflow Dashboard")
 _STATIC = Path(__file__).parent / "static"
 
 
+# Content-Security-Policy. The page is a self-contained dashboard: Chart.js is
+# self-hosted, the only external origin is Google Fonts, and there is no user
+# input. So scripts can be locked to 'self' with no 'unsafe-inline' (the theme
+# bootstrap lives in /static/theme.js precisely to make that possible) and the
+# only permitted style origin is the fonts stylesheet.
+_CSP = "; ".join([
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    # clickjacking protection (X-Frame-Options below covers older browsers)
+    "frame-ancestors 'none'",
+    "form-action 'none'",
+    "script-src 'self'",
+    "style-src 'self' https://fonts.googleapis.com",
+    "font-src https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+])
+
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": (
+        "geolocation=(), microphone=(), camera=(), payment=(), usb=(), "
+        "magnetometer=(), gyroscope=(), accelerometer=()"
+    ),
+    # No includeSubDomains: this is a Modal hostname, and we should not pin
+    # sibling *.modal.run hosts to HTTPS on a visitor's browser.
+    "Strict-Transport-Security": "max-age=31536000",
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+
+
 @app.middleware("http")
 async def api_cache_headers(request: Request, call_next):
-    """Let the browser reuse API responses briefly.
+    """Add security headers, and let the browser reuse API responses briefly.
 
     Underlying data only changes when ingestion runs (every 15 min), so serving
     a response from the browser cache for a minute is safe and saves a Modal
     invocation per repeat view.
     """
     response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers[header] = value
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "public, max-age=60"
     return response

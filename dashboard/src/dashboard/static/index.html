@@ -4,25 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aeroflow · Mumbai Airspace</title>
-  <script>
-    /* Set the theme before first paint so a light-mode visitor never sees a
-       flash of the dark palette. Saved choice wins; otherwise follow the OS. */
-    (function () {
-      var t;
-      try {
-        var saved = localStorage.getItem("aeroflow-theme");
-        t = (saved === "light" || saved === "dark") ? saved
-          : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-      } catch (e) {
-        t = "dark";
-      }
-      document.documentElement.setAttribute("data-theme", t);
-    })();
-  </script>
-  <script src="/static/chart.umd.min.js?v=20"></script>
+  <script src="/static/theme.js?v=22"></script>
+  <script src="/static/chart.umd.min.js?v=22"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=20">
+  <link rel="stylesheet" href="/static/style.css?v=22">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -136,7 +122,7 @@
   </section>
 
   <!-- Anomalies -->
-  <section class="panel wide" id="anomalies-panel" style="display:none">
+  <section class="panel wide hidden" id="anomalies-panel">
     <div class="panel-head"><h2>⚠️ Traffic anomalies</h2></div>
     <div id="anomalies-body" class="anomaly-list"></div>
   </section>
@@ -171,6 +157,6 @@
     <span>auto-refresh 3m</span>
   </footer>
 
-  <script src="/static/app.js?v=20"></script>
+  <script src="/static/app.js?v=22"></script>
 </body>
 </html>

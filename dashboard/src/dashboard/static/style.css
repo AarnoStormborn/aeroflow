@@ -200,8 +200,7 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
   background: linear-gradient(90deg, var(--skel-a) 25%, var(--skel-b) 37%, var(--skel-a) 63%);
   background-size: 400% 100%;
   animation: shimmer 1.4s ease-in-out infinite;
-}
-.chart-wrap.loaded .skeleton { display: none; }
+}.chart-wrap.loaded .skeleton { display: none; }
 @keyframes shimmer {
   0% { background-position: 100% 0; }
   100% { background-position: 0 0; }
@@ -221,6 +220,7 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
   text-align: center; font-size: 13px; color: var(--muted); pointer-events: none;
   font-weight: 600;
 }
+.donut-center .dc-unit { font-size: 11px; }
 
 .anomaly-list { display: flex; flex-direction: column; gap: 8px; }
 .anomaly {
@@ -231,6 +231,9 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 .anomaly .date { font-weight: 700; font-size: 14px; }
 .anomaly .detail { color: var(--muted); font-size: 13px; }
 .anomaly .pct { font-weight: 700; }
+/* Colour by class rather than an inline style attribute, which a strict CSP blocks. */
+.anomaly .pct.up { color: var(--amber); }
+.anomaly .pct.down { color: var(--red); }
 .anomaly.up { background: rgba(var(--amber-rgb), .05); border-color: rgba(var(--amber-rgb), .18); }
 
 .outlook-meta { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
@@ -258,6 +261,10 @@ footer {
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
 
 .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* Used instead of an inline style attribute so a strict CSP (no
+   'unsafe-inline' for styles) can be enforced. */
+.hidden { display: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
   .dotpulse { animation: none; }

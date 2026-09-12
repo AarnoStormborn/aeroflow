@@ -101,3 +101,49 @@ def test_error_stats_bias_sign():
     """Positive bias means over-prediction."""
     assert _error_stats([(20.0, 10.0)])["bias_pct"] == 100.0
     assert _error_stats([(10.0, 20.0)])["bias_pct"] == -50.0
+
+
+def test_security_headers_present_on_every_response():
+    """Hardening headers, including a strict CSP with no 'unsafe-inline'."""
+    from fastapi.testclient import TestClient
+    from src.dashboard.app import _SECURITY_HEADERS, app
+
+    c = TestClient(app)
+    for path in ("/", "/static/app.js", "/api/health"):
+        r = c.get(path)
+        for header in _SECURITY_HEADERS:
+            assert r.headers.get(header), f"{header} missing on {path}"
+
+
+def test_csp_forbids_inline_script_and_framing():
+    from fastapi.testclient import TestClient
+    from src.dashboard.app import app
+
+    csp = TestClient(app).get("/").headers["content-security-policy"]
+    assert "script-src 'self'" in csp
+    # the theme bootstrap was moved to /static/theme.js to make this possible
+    assert "'unsafe-inline'" not in csp
+    assert "frame-ancestors 'none'" in csp
+    # fonts are the only external origin allowed
+    assert "https://fonts.googleapis.com" in csp
+
+
+def test_html_has_no_inline_script_or_style():
+    """A single inline block would silently force 'unsafe-inline' back into CSP."""
+    from src.dashboard.app import _STATIC
+
+    html = (_STATIC / "index.html").read_text()
+    assert "<script>" not in html, "inline <script> found — move it to a static file"
+    assert 'style="' not in html, "inline style attribute found — CSP would need 'unsafe-inline'"
+
+
+def test_js_has_no_inline_style_attributes():
+    """innerHTML templates must not set style="..." — a strict CSP blocks those
+    (style-src-attr), which silently drops the styling."""
+    import re
+
+    from src.dashboard.app import _STATIC
+
+    js = (_STATIC / "app.js").read_text()
+    found = re.findall(r'style=\\?["\']', js)
+    assert not found, f"inline style attribute(s) in app.js: {found}"
