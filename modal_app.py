@@ -94,6 +94,9 @@ mlflow_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "mlflow==3.15.2",
+        # Required by `--app-name basic-auth`; without it the server refuses to
+        # start (mlflow's auth app imports Flask-WTF for CSRF validation).
+        "Flask-WTF<2",
         "boto3>=1.34.0",
         "psycopg2-binary>=2.9.0",
         "anyio>=4.0.0",
@@ -146,6 +149,20 @@ secrets = modal.Secret.from_name("aeroflow-env", required_keys=[
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_S3_BUCKET_NAME",
+])
+
+# MLflow basic-auth credentials. Kept in their own secret so rotating the MLflow
+# password can never disturb the main env secret (and vice versa). Needed by the
+# server itself, and by any client that talks to it over HTTP (the forecasting
+# service loads models from the registry; training writes to the SQLite store
+# directly and so does not need these).
+mlflow_auth = modal.Secret.from_name("mlflow-auth", required_keys=[
+    "MLFLOW_TRACKING_USERNAME",
+    "MLFLOW_TRACKING_PASSWORD",
+    # MLflow's auth app refuses to start without a static Flask secret key for
+    # CSRF protection. It must be STABLE across restarts, otherwise sessions and
+    # CSRF tokens are invalidated on every cold start.
+    "MLFLOW_FLASK_SERVER_SECRET_KEY",
 ])
 
 volume = modal.Volume.from_name("aeroflow-data", create_if_missing=True)
@@ -305,7 +322,7 @@ def run_training(end_date: str | None = None) -> dict:
 
 @app.function(
     image=forecast_image,
-    secrets=[secrets],
+    secrets=[secrets, mlflow_auth],
     volumes={VOLUME_MOUNT: volume},
     schedule=modal.Cron("15 * * * *"),  # every hour at :15
     timeout=600,
@@ -350,7 +367,7 @@ def dashboard_app():
 
 @app.function(
     image=forecast_image,
-    secrets=[secrets],
+    secrets=[secrets, mlflow_auth],
     volumes={VOLUME_MOUNT: volume},
     scaledown_window=30,
 )
@@ -392,13 +409,21 @@ def run_eval() -> dict:
 
 @app.function(
     image=mlflow_image,
-    secrets=[secrets],
+    secrets=[secrets, mlflow_auth],
     volumes={VOLUME_MOUNT: volume},
 )
 @modal.concurrent(max_inputs=8)
 @modal.web_server(port=5000, startup_timeout=120)
 def mlflow_ui():
-    """Expose MLflow tracking server on Modal."""
+    """Expose MLflow tracking server on Modal, requiring basic auth.
+
+    This endpoint is publicly reachable, so it MUST be authenticated: without
+    auth anyone with the URL can read every run, metric and registered model —
+    and WRITE to the registry (verified: anonymous callers could create and
+    delete experiments and registered models). Since the forecasting service
+    loads `models:/<name>/Production`, anonymous registry writes are a model-
+    poisoning / RCE vector, not just an information leak.
+    """
     import subprocess
 
     _set_env_defaults()
@@ -407,6 +432,23 @@ def mlflow_ui():
     artifact_root = os.environ.get("MLFLOW_ARTIFACT_ROOT") or (
         f"s3://{os.environ.get('AWS_S3_BUCKET_NAME', 'flights-forecasting')}/mlflow"
     )
+
+    # MLflow falls back to its OWN bundled config when MLFLOW_AUTH_CONFIG_PATH
+    # is unset, and that ships a well-known default admin password. So always
+    # point it at a config we generate from the secret.
+    auth_ini = "/tmp/basic_auth.ini"
+    with open(auth_ini, "w") as f:
+        f.write(
+            "[mlflow]\n"
+            "default_permission = READ\n"
+            # Auth tables live in ephemeral storage on purpose: the admin user is
+            # recreated from this config on every start, so the password always
+            # matches the secret instead of going stale in a persisted auth DB.
+            "database_uri = sqlite:////tmp/mlflow_auth.db\n"
+            f"admin_username = {os.environ['MLFLOW_TRACKING_USERNAME']}\n"
+            f"admin_password = {os.environ['MLFLOW_TRACKING_PASSWORD']}\n"
+        )
+    os.environ["MLFLOW_AUTH_CONFIG_PATH"] = auth_ini
 
     # Run mlflow server on 0.0.0.0:5000 with the Volume-backed SQLite store.
     # MLflow 3.5+ validates Host headers; Modal proxies requests with its own
@@ -418,6 +460,7 @@ def mlflow_ui():
         "--host", "0.0.0.0",
         "--port", "5000",
         "--allowed-hosts", "*",
+        "--app-name", "basic-auth",
     ]
     proc = subprocess.Popen(cmd)
     return proc
