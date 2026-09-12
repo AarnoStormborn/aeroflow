@@ -70,3 +70,42 @@ def test_plot_forecast_with_ci():
     fig = plot_forecast_with_ci(y_true, y_pred, mape=0.106, title="Test Forecast CI")
     assert fig is not None
     assert len(fig.axes) == 1
+
+
+# ---- champion guard ------------------------------------------------------
+# train_production retrains every 3 days and used to promote unconditionally.
+# A backtest showed retrains scoring WORSE than the incumbent, so these pin the
+# decision that stops a regression from being served.
+
+from src.training.train_production import MIN_IMPROVEMENT, should_promote  # noqa: E402
+
+
+def test_promotes_when_no_incumbent():
+    """Fresh registry: nothing to beat, so bootstrap."""
+    assert should_promote(42.0, None) is True
+
+
+def test_promotes_on_clear_improvement():
+    assert should_promote(10.0, 20.0) is True
+
+
+def test_keeps_incumbent_when_worse():
+    assert should_promote(25.0, 20.0) is False
+
+
+def test_keeps_incumbent_when_equal():
+    assert should_promote(20.0, 20.0) is False
+
+
+def test_requires_a_margin_not_just_a_win():
+    """A marginal win is noise on this dataset and must not cause churn."""
+    just_inside = 20.0 * (1 - MIN_IMPROVEMENT) + 0.01   # 1pp shy of the margin
+    just_outside = 20.0 * (1 - MIN_IMPROVEMENT) - 0.01  # just past it
+    assert should_promote(just_inside, 20.0) is False
+    assert should_promote(just_outside, 20.0) is True
+
+
+def test_never_promotes_a_nan_score():
+    nan = float("nan")
+    assert should_promote(nan, 20.0) is False
+    assert should_promote(10.0, 20.0) is True  # sanity: guard only blocks NaN new

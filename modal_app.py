@@ -319,7 +319,17 @@ def run_training(end_date: str | None = None) -> dict:
 
     d = date.fromisoformat(end_date) if end_date else None
     result = train_production(d)
-    return {"component": "training", "status": result.get("status", "?")}
+    return {
+        "component": "training",
+        "status": result.get("status", "?"),
+        # Surfaced so a run's outcome is visible without reading the registry:
+        # a retrain that loses to the incumbent now reports kept_incumbent.
+        "decision": result.get("decision"),
+        "reason": result.get("reason"),
+        "version": result.get("version"),
+        "val_mape": result.get("val_mape"),
+        "incumbent_mape": result.get("incumbent_mape"),
+    }
 
 
 # ---------------------------------------------------------------------------

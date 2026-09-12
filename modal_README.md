@@ -87,6 +87,23 @@ modal serve modal_app.py      # live-reload dev server (web endpoints get temp U
     response timing.
   - The hourly **scheduled** forecast (`run_forecast`) does not go through HTTP
     and needs no key.
+- **The scheduled retrain does not auto-promote.** `train_production` scores the
+  candidate and the incumbent Production model on the **same** validation split
+  and promotes only if the candidate wins by `MIN_IMPROVEMENT` (default 5%
+  relative). It previously promoted unconditionally, which is unsafe here: a
+  backtest on held-out days scored retrains 3-5 points worse than v4
+  (MAPE 20.0-21.9% vs 16.9%), so an unguarded retrain would have degraded
+  production. The margin also prevents churn, since on ~150 samples a 0.5pp
+  "win" is noise. `should_promote()` is pure and unit-tested.
+  - A declined retrain is still registered (stage `None`) so it can be
+    inspected, and the Modal run reports `decision: kept_incumbent` with the
+    reason.
+  - If a Production version exists but cannot be scored, the guard keeps it
+    rather than promoting blind.
+  - Promotion passes `archive_existing_versions=True` so exactly one version
+    stays in Production. Without it, MLflow leaves every previously-promoted
+    version in the stage and `models:/<name>/Production` would silently fall
+    back to an older model if the newest were archived.
 - The **dashboard stays public by design** and cannot use header auth: a browser
   cannot attach a custom `Authorization` header to a page navigation, and any
   key shipped to the client would be readable by everyone. Its `/api/*` routes

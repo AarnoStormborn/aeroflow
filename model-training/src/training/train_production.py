@@ -58,6 +58,58 @@ MIN_DAYS = 3
 # and at least this many total samples
 MIN_SAMPLES = 40
 
+# A retrain must beat the incumbent Production model by at least this much
+# (relative, on the same validation split) before it is promoted. Without a
+# margin, noise on a small dataset causes the served model to flap between
+# runs. Raise it to demand a clearer win.
+MIN_IMPROVEMENT = 0.05
+
+
+def should_promote(new_mape: float | None, incumbent_mape: float | None,
+                   min_improvement: float = MIN_IMPROVEMENT) -> bool:
+    """Decide whether a retrain should replace the served model.
+
+    `incumbent_mape=None` means there is no Production model to beat (a fresh
+    registry), which is the only case where promoting blind is correct.
+    """
+    if incumbent_mape is None:
+        return True
+    if new_mape is None or math.isnan(new_mape):
+        return False
+    return new_mape < incumbent_mape * (1 - min_improvement)
+
+
+def incumbent_mape(X_va, y_va) -> tuple[float | None, str]:
+    """Validation MAPE of the model currently in Production, on the SAME split.
+
+    Returns (mape, status):
+      "absent" - nothing in Production, so there is no incumbent to beat
+      "ok"     - mape holds the incumbent's score on this exact validation set
+      "error"  - a Production version exists but could not be loaded; we do not
+                 replace a model we cannot measure
+    """
+    try:
+        client = mlflow.tracking.MlflowClient()
+        versions = [v for v in client.search_model_versions(f"name='{MODEL_NAME}'")
+                    if v.current_stage == "Production"]
+    except Exception as e:
+        logger.warning(f"Could not list versions for {MODEL_NAME}: {e}")
+        return None, "error"
+
+    if not versions:
+        return None, "absent"
+
+    # `models:/<name>/Production` resolves to the highest version in the stage,
+    # so score exactly that one rather than an arbitrary pick.
+    target = max(versions, key=lambda v: int(v.version))
+    try:
+        model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{target.version}")
+        pred = model.predict(X_va)
+        return mean_absolute_percentage_error(y_va, pred) * 100, "ok"
+    except Exception as e:
+        logger.warning(f"Could not evaluate incumbent v{target.version}: {e}")
+        return None, "error"
+
 
 def load_freshest_features(end_date: date | None = None,
                            lookback_days: int = 21) -> pl.DataFrame:
@@ -165,20 +217,55 @@ def train_production(end_date: date | None = None) -> dict:
                                  "xgboost.sklearn.XGBRegressor"),
         )
 
-        # Promote the NEW version (from log_model's registration) to Production
+        # Promote only if the retrain actually beats what is being served.
+        # Regression here is real: a backtest of v4 against retrains on the same
+        # held-out days scored the retrains 3-5 points WORSE (MAPE 20.0-21.9%
+        # vs 16.9%), so unconditional promotion would have degraded production.
         client = mlflow.tracking.MlflowClient()
         new_v = logged.registered_model_version
-        if new_v:
-            client.transition_model_version_stage(MODEL_NAME, new_v, "Production")
-            logger.info(f"Promoted {MODEL_NAME} v{new_v} to Production")
+        incumbent, inc_status = incumbent_mape(X_va, y_va)
+        promote = should_promote(metrics["val_mape"], incumbent)
+        if inc_status == "error":
+            # A Production model exists but we could not score it. Keep it.
+            promote = False
 
-        print(f"\nRegistered {MODEL_NAME} v{new_v} from run {run_id}")
-        print(f"Val MAPE: {metrics['val_mape']:.2f}% | Val MAE: {metrics['val_mae']:.2f}")
+        if incumbent is not None:
+            mlflow.log_metric("incumbent_val_mape", incumbent)
+
+        if new_v and promote:
+            # archive_existing_versions keeps exactly one Production version, so
+            # `models:/<name>/Production` can never silently fall back to an
+            # older model that was left in the stage.
+            client.transition_model_version_stage(
+                MODEL_NAME, new_v, "Production", archive_existing_versions=True
+            )
+            logger.info(f"Promoted {MODEL_NAME} v{new_v} to Production")
+            decision = "promoted"
+            reason = ("no incumbent" if incumbent is None else
+                      f"{metrics['val_mape']:.2f}% beats incumbent {incumbent:.2f}%")
+        else:
+            decision = "kept_incumbent"
+            if inc_status == "error":
+                reason = "incumbent could not be evaluated"
+            elif incumbent is None:
+                reason = "no registered version to promote"
+            else:
+                reason = (f"{metrics['val_mape']:.2f}% did not beat incumbent "
+                          f"{incumbent:.2f}% by {MIN_IMPROVEMENT:.0%}")
+            logger.warning(f"Not promoting {MODEL_NAME} v{new_v}: {reason}")
+
+        print(f"\nRegistered {MODEL_NAME} v{new_v} from run {run_id} ({decision}: {reason})")
+        print(f"Val MAPE: {metrics['val_mape']:.2f}%"
+              + (f" | incumbent: {incumbent:.2f}%" if incumbent is not None else ""))
 
         return {
             "status": "trained",
+            "decision": decision,
+            "reason": reason,
             "run_id": run_id,
+            "version": new_v,
             "val_mape": metrics["val_mape"],
+            "incumbent_mape": incumbent,
             "n_days": n_days,
             "n_samples": n_samples,
         }
