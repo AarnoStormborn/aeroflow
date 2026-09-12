@@ -40,7 +40,14 @@ Single Modal app hosting all pipeline components serverlessly.
      MLFLOW_TRACKING_USERNAME=admin \
      MLFLOW_TRACKING_PASSWORD=<strong-password> \
      MLFLOW_FLASK_SERVER_SECRET_KEY=<random-64-hex>
+
+   # Required: the forecasting HTTP API is public and /forecast does real work.
+   modal secret create aeroflow-api-auth \
+     AEROFLOW_API_KEY=<strong-random-key>
    ```
+
+   Each is a separate secret so a compromise or rotation of one cannot affect
+   the others, and so no function receives credentials it does not use.
 
    `mlflow-auth` is a separate secret so rotating the MLflow password cannot
    disturb `aeroflow-env`. `MLFLOW_FLASK_SERVER_SECRET_KEY` must be **stable**:
@@ -67,6 +74,23 @@ modal serve modal_app.py      # live-reload dev server (web endpoints get temp U
 ## Notes
 
 - **DB_PATH** defaults to `/data/ingestion.db` (Volume). Set explicitly in the secret if needed.
+- **The forecasting HTTP API requires an API key.** `forecast_api` is a public
+  URL and `GET /forecast` performs real work, so unauthenticated callers could
+  trigger unlimited forecast runs and read the model names/versions. Every route
+  requires `Authorization: Bearer <AEROFLOW_API_KEY>` (from
+  `aeroflow-api-auth`).
+  - It **fails closed**: if `AEROFLOW_API_KEY` is unset the API returns 503
+    rather than allowing anonymous access, so a missing secret cannot silently
+    reopen it. Covered by tests in
+    `forecasting/tests/unit/test_api_auth.py`.
+  - Comparison uses `secrets.compare_digest` to avoid leaking the key via
+    response timing.
+  - The hourly **scheduled** forecast (`run_forecast`) does not go through HTTP
+    and needs no key.
+- The **dashboard stays public by design** and cannot use header auth: a browser
+  cannot attach a custom `Authorization` header to a page navigation, and any
+  key shipped to the client would be readable by everyone. Its `/api/*` routes
+  are read-only and served from the published S3 payload cache.
 - **MLflow** uses a Volume-backed SQLite store + S3 artifact root (`s3://flights-forecasting/mlflow`).
 - **MLflow requires basic auth.** `mlflow_ui` is a public URL, so anonymous
   access exposes every run and model — and, verified in an audit, allowed

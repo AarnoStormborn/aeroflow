@@ -35,3 +35,19 @@ The service serves a **single** model. An A/B period ran `flight-traffic-forecas
 (Dec–Jan) alongside `flight-traffic-hourly` (current regime); the former was
 retired after it lost decisively (paired h=1 MAPE 204% vs 69%, losing 69/69
 shared target-hours). Every forecast records the producing `model_version`.
+
+## Authentication
+
+`GET /forecast`, `/models` and `/health` all require a bearer token:
+
+```bash
+curl -H "Authorization: Bearer $AEROFLOW_API_KEY" https://<forecast-api>/forecast
+```
+
+The key comes from the `AEROFLOW_API_KEY` env var (Modal secret
+`aeroflow-api-auth`). The endpoint is publicly reachable and `/forecast` does
+real work (model load + S3 reads), so the key is what stops anonymous callers
+triggering unlimited runs.
+
+Auth **fails closed**: with `AEROFLOW_API_KEY` unset every route returns 503
+instead of falling open. Comparison is constant-time.

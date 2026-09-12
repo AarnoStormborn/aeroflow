@@ -165,6 +165,13 @@ mlflow_auth = modal.Secret.from_name("mlflow-auth", required_keys=[
     "MLFLOW_FLASK_SERVER_SECRET_KEY",
 ])
 
+# Shared secret for the public forecasting HTTP API. Its own secret so the key is
+# only handed to the one function that checks it (least privilege) and can be
+# rotated without touching anything else.
+api_auth = modal.Secret.from_name("aeroflow-api-auth", required_keys=[
+    "AEROFLOW_API_KEY",
+])
+
 volume = modal.Volume.from_name("aeroflow-data", create_if_missing=True)
 VOLUME_MOUNT = "/data"
 
@@ -367,7 +374,7 @@ def dashboard_app():
 
 @app.function(
     image=forecast_image,
-    secrets=[secrets, mlflow_auth],
+    secrets=[secrets, mlflow_auth, api_auth],
     volumes={VOLUME_MOUNT: volume},
     scaledown_window=30,
 )

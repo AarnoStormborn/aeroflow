@@ -4,20 +4,50 @@ On-demand forecast API (FastAPI).
 Serves a fresh forecast over HTTP so it can be queried on demand (vs. the
 hourly scheduled run). Exposed on Modal as a web endpoint.
 
+Every route requires `Authorization: Bearer <AEROFLOW_API_KEY>`. This endpoint
+is publicly reachable and `GET /forecast` performs real work, so without a key
+anyone who has the URL can trigger unlimited forecast runs (a cost/DoS vector).
+It also exposes the registered model names and versions.
+
 Endpoints:
     GET /forecast          -> run a fresh forecast now (all configured models)
     GET /health            -> liveness
     GET /models            -> which models are configured
 """
 
+import secrets
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 from src.forecasting.config import settings
 from src.forecasting.models.forecaster import ForecastEngine
 
-app = FastAPI(title="Aeroflow Forecasting API")
+
+def require_api_key(authorization: str | None = Header(default=None)) -> None:
+    """Validate `Authorization: Bearer <AEROFLOW_API_KEY>`.
+
+    Fails closed: if the key is not configured we reject rather than allow, so a
+    missing secret can never silently turn the endpoint back into an open one.
+    """
+    expected = settings.api_key
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server misconfigured: AEROFLOW_API_KEY is not set",
+        )
+
+    scheme, _, token = (authorization or "").partition(" ")
+    # compare_digest to avoid leaking the key through response timing
+    if scheme.lower() != "bearer" or not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+app = FastAPI(title="Aeroflow Forecasting API", dependencies=[Depends(require_api_key)])
 
 
 class ModelForecast(BaseModel):

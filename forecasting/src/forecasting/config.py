@@ -66,6 +66,11 @@ class Settings(BaseSettings):
 
     s3: S3Settings = Field(default_factory=S3Settings)
     forecast: ForecastSettings = Field(default_factory=ForecastSettings)
+    # Shared secret for the public forecasting HTTP API. Read from the
+    # AEROFLOW_API_KEY env var (Modal secret `aeroflow-api-auth`).
+    api_key: str | None = Field(default=None, validation_alias="AEROFLOW_API_KEY")
+
+    model_config = SettingsConfigDict(populate_by_name=True)
 
 
 settings = Settings()
