@@ -147,3 +147,23 @@ def test_js_has_no_inline_style_attributes():
     js = (_STATIC / "app.js").read_text()
     found = re.findall(r'style=\\?["\']', js)
     assert not found, f"inline style attribute(s) in app.js: {found}"
+
+
+def test_favicon_referenced_and_served_with_correct_type():
+    """Favicons must ship the right MIME type: X-Content-Type-Options: nosniff
+    makes the browser refuse an icon served as text/plain."""
+    from fastapi.testclient import TestClient
+    from src.dashboard.app import _STATIC, app
+
+    html = (_STATIC / "index.html").read_text()
+    assert 'rel="icon"' in html
+    assert "favicon.svg" in html and "favicon.png" in html
+
+    c = TestClient(app)
+    r = c.get("/static/favicon.svg")
+    assert r.status_code == 200
+    assert "image/svg+xml" in r.headers["content-type"]
+
+    r = c.get("/static/favicon.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
