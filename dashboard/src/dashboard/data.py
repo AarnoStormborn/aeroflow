@@ -463,6 +463,43 @@ def _breakdown(df: pl.DataFrame) -> dict:
     }
 
 
+def _explain_anomaly(day, by_day, days_sorted, trail_days, day_mean) -> tuple[str, str]:
+    """Explain a flagged day using data we already have — no external lookup.
+
+    Deliberately data-grounded. The largest source of apparent "traffic
+    anomalies" in this feed is a change in how traffic is MEASURED, not real
+    traffic: on 2026-09-07 the capture rate halved overnight (17 -> 8 aircraft
+    per poll) and stayed there, which makes every following day look like a
+    30% shortfall against a baseline that straddles the change. Attributing such
+    a day to weather or events would be confidently wrong, so report the
+    evidence instead of guessing a cause.
+    """
+    hours = by_day[day].height
+    if hours < 20:
+        return "incomplete ingestion", f"only {hours} of 24 hours were ingested"
+
+    # A step change inside the baseline makes the comparison meaningless: the
+    # trailing mean mixes two different capture rates.
+    means = [(d, float(by_day[d]["flight_count"].mean())) for d in trail_days]
+    for i in range(1, len(means)):
+        prev, cur = means[i - 1][1], means[i][1]
+        if prev and abs(cur - prev) / prev > 0.25:
+            return (
+                "baseline spans a data change",
+                f"hourly traffic stepped {prev:.0f} -> {cur:.0f} on {means[i][0]}, "
+                f"which is inside the comparison window",
+            )
+
+    idx = days_sorted.index(day)
+    after = days_sorted[idx + 1:]
+    if after and all(
+        abs(float(by_day[d]["flight_count"].mean()) - day_mean) / day_mean * 100 < 15
+        for d in after
+    ):
+        return "sustained level shift", f"the new level has held for {len(after)} day(s)"
+    return "transient deviation", "the level returned to the trailing range"
+
+
 def patterns_snapshot() -> dict:
     store = S3Store()
 
@@ -516,11 +553,16 @@ def patterns_snapshot() -> dict:
                 if trail_mean > 0:
                     dev = (day_mean - trail_mean) / trail_mean * 100
                     if abs(dev) > 20:
+                        cause, evidence = _explain_anomaly(
+                            d, by_day, days_sorted, trail, day_mean
+                        )
                         anomalies.append({
                             "date": d,
                             "mean": round(day_mean, 1),
                             "trail_mean": round(trail_mean, 1),
                             "deviation_pct": round(dev, 1),
+                            "likely_cause": cause,
+                            "evidence": evidence,
                         })
 
         # last-7-day overlay of hourly curves for the trend chart

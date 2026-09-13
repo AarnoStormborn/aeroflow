@@ -40,6 +40,25 @@ On theme change, charts are re-rendered from the last good payload held in the
 `CACHE` object rather than refetched, so a slow or failing request can't leave
 some charts painted in the previous theme.
 
+## Anomaly explanations
+
+Days whose mean deviates >20% from the trailing window are flagged, and each is
+given a **data-grounded** explanation rather than an external attribution:
+
+- `incomplete ingestion` - fewer than 20 of 24 hours were ingested
+- `baseline spans a data change` - a >25% step inside the comparison window
+- `sustained level shift` - the new level holds on following days
+- `transient deviation` - the level returns to the trailing range
+
+This is deliberate. On 2026-09-07 the feed's capture rate halved overnight
+(17 -> 8 aircraft per poll) and stayed there for a week, which made every
+subsequent day look like a ~30% traffic shortfall against a baseline straddling
+the change. Attributing such a day to weather or a real event would be
+confidently wrong, so the panel reports the evidence and lets the reader judge.
+External attribution (weather, events) would only be worth adding for deviations
+that survive these checks - and would need an LLM/search key plus a cost budget,
+which this project does not currently have.
+
 ## Security headers
 
 Every response carries a strict CSP plus the usual hardening headers — see

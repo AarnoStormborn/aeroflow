@@ -240,11 +240,14 @@ function renderAnomalies(anomalies) {
   panel.classList.remove("hidden");
   document.getElementById("anomalies-body").innerHTML = anomalies.map(a => {
     const up = a.deviation_pct > 0;
+    const cause = a.likely_cause ? `<span class="cause">${a.likely_cause}</span>` : "";
+    const why = a.evidence ? `<div class="why">${a.evidence}</div>` : "";
     return `<div class="anomaly ${up ? "up" : ""}">
       <span class="date">${a.date}</span>
-      <span class="detail">avg <b>${a.mean}</b> flights vs trailing-week <b>${a.trail_mean}</b></span>
+      <span class="detail">avg <b>${a.mean}</b> flights vs trailing-week <b>${a.trail_mean}</b>${cause}</span>
       <span class="pct ${up ? "up" : "down"}">
         ${up ? "▲" : "▼"} ${Math.abs(a.deviation_pct).toFixed(1)}%</span>
+      ${why}
     </div>`;
   }).join("");
 }

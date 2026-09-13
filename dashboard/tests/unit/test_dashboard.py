@@ -167,3 +167,79 @@ def test_favicon_referenced_and_served_with_correct_type():
     r = c.get("/static/favicon.png")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/png"
+
+
+# ---- anomaly explanations -----------------------------------------------
+# The dashboard flagged Sep 6 (+30%) and Sep 7 (-27%) as traffic anomalies.
+# They are not: the capture rate halved overnight on Sep 7 (17 -> 8 aircraft
+# per poll) and stayed there, so the baseline straddles a measurement change.
+# These pin the explanation logic that says so instead of implying weather.
+
+def _day(counts):
+    from datetime import datetime, timezone
+
+    import polars as pl
+
+    return pl.DataFrame({
+        "hour_start": [datetime(2026, 9, 1, h, tzinfo=timezone.utc) for h in range(len(counts))],
+        "flight_count": [float(c) for c in counts],
+    })
+
+
+def test_explains_incomplete_ingestion():
+    from src.dashboard.data import _explain_anomaly
+
+    by_day = {"2026-09-01": _day([30] * 11)}  # only 11 of 24 hours
+    cause, evidence = _explain_anomaly("2026-09-01", by_day, ["2026-09-01"], [], 30.0)
+    assert cause == "incomplete ingestion"
+    assert "11 of 24" in evidence
+
+
+def test_explains_baseline_spanning_a_data_change():
+    """The real Sep 7 case: a step inside the comparison window."""
+    from src.dashboard.data import _explain_anomaly
+
+    trail = ["2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09"]
+    by_day = {
+        "2026-09-05": _day([55] * 24),
+        "2026-09-06": _day([52] * 24),
+        "2026-09-07": _day([29] * 24),   # -44% step
+        "2026-09-08": _day([29] * 24),
+        "2026-09-09": _day([29] * 24),
+        "2026-09-10": _day([29] * 24),
+    }
+    days = sorted(by_day)
+    cause, evidence = _explain_anomaly("2026-09-10", by_day, days, trail, 29.0)
+    assert cause == "baseline spans a data change"
+    assert "2026-09-07" in evidence and "52 -> 29" in evidence
+
+
+def test_explains_sustained_level_shift():
+    from src.dashboard.data import _explain_anomaly
+
+    trail = ["2026-09-01", "2026-09-02"]
+    by_day = {
+        "2026-09-01": _day([40] * 24),
+        "2026-09-02": _day([40] * 24),
+        "2026-09-03": _day([20] * 24),
+        "2026-09-04": _day([20] * 24),
+        "2026-09-05": _day([20] * 24),
+    }
+    days = sorted(by_day)
+    cause, _ = _explain_anomaly("2026-09-03", by_day, days, trail, 20.0)
+    assert cause == "sustained level shift"
+
+
+def test_explains_transient_deviation():
+    from src.dashboard.data import _explain_anomaly
+
+    trail = ["2026-09-01", "2026-09-02"]
+    by_day = {
+        "2026-09-01": _day([40] * 24),
+        "2026-09-02": _day([40] * 24),
+        "2026-09-03": _day([20] * 24),   # the dip
+        "2026-09-04": _day([40] * 24),   # and back
+    }
+    days = sorted(by_day)
+    cause, _ = _explain_anomaly("2026-09-03", by_day, days, trail, 20.0)
+    assert cause == "transient deviation"
