@@ -61,8 +61,17 @@ Single Modal app hosting all pipeline components serverlessly.
 
 4. **Deploy**:
    ```bash
-   modal deploy modal_app.py
+   ./scripts/deploy.sh        # preferred: pins the workspace
    ```
+
+   `modal deploy` targets whichever profile is active in `~/.modal.toml`, and
+   that silently flipped to a different workspace more than once during this
+   project — deploying there would create this app *and* its secrets (AWS keys,
+   OpenSky credentials, Discord webhook) in the wrong workspace. So deploy
+   through the wrapper, which pins `MODAL_PROFILE`. `modal_app.py` additionally
+   refuses to import under an unexpected profile, so a direct
+   `modal deploy modal_app.py` fails fast with instructions. Deliberately
+   override with `AEROFLOW_SKIP_PROFILE_CHECK=1`.
 
 ## Local testing
 

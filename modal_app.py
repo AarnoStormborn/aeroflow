@@ -31,6 +31,61 @@ import os
 import modal
 
 # ---------------------------------------------------------------------------
+# Deploy-target guard
+# ---------------------------------------------------------------------------
+# Modal's active profile is sticky global state, and it silently flipped to a
+# different workspace more than once during this project. Deploying under the
+# wrong profile would create this app AND its Modal secrets (AWS keys, OpenSky
+# credentials, Discord webhook) in that other workspace. So refuse to run rather
+# than trust the ambient setting.
+EXPECTED_MODAL_PROFILE = "harshsingh90220"
+
+
+def _resolved_modal_profile() -> str | None:
+    """The profile Modal would actually use, or None if undeterminable.
+
+    MODAL_PROFILE wins, matching modal.config._set_profile; otherwise fall back
+    to whichever profile is marked active in ~/.modal.toml.
+    """
+    override = os.environ.get("MODAL_PROFILE")
+    if override:
+        return override
+    try:
+        import modal.config as _mc
+
+        return _mc._config_active_profile()
+    except Exception:
+        # Private API: never let an upstream change crash the guard.
+        return None
+
+
+def _check_deploy_target() -> None:
+    """Fail fast if we would deploy into the wrong workspace."""
+    # Inside a container the local profile is irrelevant and unresolvable.
+    if not modal.is_local():
+        return
+    if os.environ.get("AEROFLOW_SKIP_PROFILE_CHECK") == "1":
+        return
+
+    profile = _resolved_modal_profile()
+    if profile != EXPECTED_MODAL_PROFILE:
+        raise RuntimeError(
+            f"\nRefusing to run under Modal profile {profile!r}.\n"
+            f"This app belongs to {EXPECTED_MODAL_PROFILE!r}, and deploying under "
+            f"another profile would create the app and its secrets in the wrong "
+            f"workspace.\n\n"
+            f"Fix it with either:\n"
+            f"  modal profile activate {EXPECTED_MODAL_PROFILE}\n"
+            f"  modal --profile {EXPECTED_MODAL_PROFILE} <command>\n"
+            f"  MODAL_PROFILE={EXPECTED_MODAL_PROFILE} <command>\n\n"
+            f"(scripts/deploy.sh already pins the profile.)\n"
+            f"Deliberately override with AEROFLOW_SKIP_PROFILE_CHECK=1.\n"
+        )
+
+
+_check_deploy_target()
+
+# ---------------------------------------------------------------------------
 # App / image / volume / secrets
 # ---------------------------------------------------------------------------
 
