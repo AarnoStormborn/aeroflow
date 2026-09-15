@@ -243,3 +243,17 @@ def test_explains_transient_deviation():
     days = sorted(by_day)
     cause, _ = _explain_anomaly("2026-09-03", by_day, days, trail, 20.0)
     assert cause == "transient deviation"
+
+
+def test_github_star_button_present_and_csp_safe():
+    """The GitHub star link must exist, point at the real repo, open safely in a
+    new tab, and introduce no inline style/script (the strict CSP forbids
+    those; the existing no-inline-style test re-checks the whole file)."""
+    from src.dashboard.app import _STATIC
+
+    html = (_STATIC / "index.html").read_text()
+    assert "gh-star" in html
+    assert "github.com/AarnoStormborn/aeroflow" in html
+    assert 'target="_blank"' in html
+    # noopener is what makes target=_blank safe (tab nabbing)
+    assert "noopener" in html

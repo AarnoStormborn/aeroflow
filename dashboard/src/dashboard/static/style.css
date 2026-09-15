@@ -150,6 +150,24 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 .theme-toggle:hover { color: var(--text); border-color: rgba(var(--accent-rgb), .5); }
 .theme-toggle:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .6); outline-offset: 2px; }
 
+/* GitHub star button. Self-contained (inline SVG, no external img/script), so
+   it stays inside the strict CSP: framed in the header, styled like GitHub's
+   own star button, link only. */
+.gh-star {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); font-size: 12px; font-weight: 600;
+  text-decoration: none; line-height: 1;
+  transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+}
+.gh-star svg { fill: currentColor; }
+.gh-star:hover, .gh-star:focus-visible {
+  border-color: rgba(var(--accent-rgb), .5);
+  color: var(--accent);
+}
+.gh-star:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .6); outline-offset: 2px; }
+
 /* KPI strip */
 .kpi-strip {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px;
