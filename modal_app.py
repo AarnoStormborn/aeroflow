@@ -407,7 +407,25 @@ def run_forecast() -> dict:
     from src.forecasting.models.forecaster import run_forecast as _rf
 
     result = _rf()
-    return {"component": "forecast", "status": "ok", "generated_at": result["generated_at"]}
+
+    # Health checks ride along with the hourly run: Modal's plan allows only 5
+    # scheduled functions and all 5 are taken. Non-fatal by design - a check
+    # failure must never break forecasting.
+    health = {}
+    try:
+        from src.forecasting.models.health import alert_if_unhealthy
+
+        health = alert_if_unhealthy()
+    except Exception as e:
+        print(f"health check failed (non-fatal): {e}")
+
+    return {
+        "component": "forecast",
+        "status": "ok",
+        "generated_at": result["generated_at"],
+        "health_ok": health.get("ok"),
+        "health_issues": [i["key"] for i in health.get("issues", [])],
+    }
 
 
 @app.function(

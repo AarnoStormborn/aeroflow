@@ -101,10 +101,12 @@ aggregate from S3 costs real money. Three things keep that bounded:
 Measured effect on execution time per endpoint: forecasts 97.0s -> 0.65s,
 patterns 41.2s -> 0.65s, live 48.4s -> 0.99s, health 3.3s -> 0.65s.
 
-The frontend polls every 3 minutes (`setInterval(refresh, 180000)`). Data is
-only ingested every 15 minutes, so polling faster asks for changes that cannot
-exist. Time-derived UI (the clock, snapshot age) updates locally via
-`tickLocal()` without any network call.
+The frontend polls every 3 minutes, but only while the tab is **visible**
+(`startPolling`/`stopPolling` wired to the Page Visibility API, with an
+immediate catch-up refresh on return). It stops polling when the tab is
+backgrounded: Modal bills container runtime and a backgrounded tab's poll pays
+a full cold start for data nobody is looking at. Time-derived UI (the clock,
+snapshot age) updates locally via `tickLocal()` without any network call.
 
 `_PAYLOAD_TTL` (300s) is the main freshness/cost knob: it bounds how stale a
 served payload may be.

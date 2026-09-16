@@ -96,6 +96,15 @@ modal serve modal_app.py      # live-reload dev server (web endpoints get temp U
     response timing.
   - The hourly **scheduled** forecast (`run_forecast`) does not go through HTTP
     and needs no key.
+- **Pipeline health checks ride along with the hourly forecast.** `run_forecast`
+  runs `health.alert_if_unhealthy()` after each forecast (non-fatal): it checks
+  S3 for ingestion staleness (>45/120 min), forecast staleness (>150 min), and
+  a coverage collapse (latest day's density <70% of the trailing 8-day median),
+  and posts to Discord on state change, on recovery, and (for a still-broken
+  problem) at most once every 6 hours. This exists because two failures — a
+  crashed retrain and the Sep 7 capture-rate halving — each went unnoticed for
+  days despite being visible in S3 the whole time. It rides in `run_forecast`
+  because Modal's plan allows only 5 scheduled functions and all 5 are taken.
 - **The scheduled retrain does not auto-promote.** `train_production` scores the
   candidate and the incumbent Production model on the **same** validation split
   and promotes only if the candidate wins by `MIN_IMPROVEMENT` (default 5%

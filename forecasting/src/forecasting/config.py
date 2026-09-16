@@ -17,6 +17,9 @@ class S3Settings(BaseSettings):
     raw_prefix: str = Field(default="raw/flights/states")
     # Where forecasts get written
     forecast_prefix: str = Field(default="forecasts/hourly")
+    # Where hourly feature files live (one parquet per day). Used by the health
+    # checks to measure captured traffic density without touching raw data.
+    features_prefix: str = Field(default="features/hourly")
     region: str = Field(default="ap-south-1")
     access_key_id: str | None = Field(default=None, validation_alias="AWS_ACCESS_KEY_ID")
     secret_access_key: str | None = Field(default=None, validation_alias="AWS_SECRET_ACCESS_KEY")

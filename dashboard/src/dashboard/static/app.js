@@ -613,9 +613,36 @@ async function bootstrap() {
 initTheme();
 bootstrap();
 tickLocal();
-// Data is ingested every 15 min, so polling every 60s was 15x more requests
-// than the data could possibly justify -- each one re-reading S3 and running
-// polars aggregations on Modal. Poll less often; the containers scale down in
-// between.
-setInterval(refresh, 180000);
+
+/* Poll only while the tab is actually visible.
+
+   Modal bills container runtime, and a container scales down 30s after its last
+   request, so a poll from a backgrounded tab pays a full cold start (~9s
+   measured) to fetch data nobody is looking at. Measured over 22h: one idle tab
+   polling every 3 min produced ~1,900 requests and ~17,500s of execution -- the
+   per-request average was 9.3s, almost all of it cold-start overhead, which was
+   roughly half the workspace bill. */
+const POLL_MS = 180000;
+let pollTimer = null;
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(refresh, POLL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    startPolling();
+    refresh();   // catch up as soon as the tab is looked at again
+  }
+});
+
+if (!document.hidden) startPolling();
+// Purely local (clock, snapshot age) — no network, so it can keep running.
 setInterval(tickLocal, 15000);
