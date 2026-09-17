@@ -136,3 +136,49 @@ def test_alert_flow_never_raises(monkeypatch):
     r = h.alert_if_unhealthy(NOW)
     assert r.get("alerted") is False
     assert "error" in r
+
+
+# ---- polls-per-hour (the Sep 14 check) ------------------------------------
+
+def test_hour_from_key_parses_utc_hour():
+    from src.forecasting.models.health import _hour_from_key
+
+    assert _hour_from_key("raw/x/day=14/20260914_215718.parquet") == 21
+    assert _hour_from_key("raw/x/20260914_071212.parquet") == 7
+    assert _hour_from_key("not-a-file") is None
+
+
+def test_sparse_hours_flags_the_sep14_pattern():
+    from src.forecasting.models.health import _sparse_hours
+
+    # Sep 14: 13:00 had 2 polls, 14:00 had 1; everything else normal (4).
+    polls = {h: 4 for h in range(24)}
+    polls[13] = 2
+    polls[14] = 1
+    assert _sparse_hours(polls, 24) == [13, 14]
+
+
+def test_sparse_hours_normal_and_boundary_days_pass():
+    from src.forecasting.models.health import _sparse_hours
+
+    # a typical day: 4 polls/hour, one hour at 3 (boundary artifact)
+    polls = {h: 4 for h in range(24)}
+    polls[19] = 3
+    assert _sparse_hours(polls, 24) == []
+
+
+def test_sparse_hours_respects_the_current_partial_hour():
+    """A 9:05 run must not flag 9:00 as sparse — its first poll is still due."""
+    from src.forecasting.models.health import _sparse_hours
+
+    polls = {h: 4 for h in range(9)}
+    # hour 9 has 0 so far, but it is the STILL-RUNNING hour: excluded by max_hour=9
+    assert _sparse_hours(polls, 9) == []
+
+
+def test_sparse_hours_flags_a_whole_empty_hour():
+    from src.forecasting.models.health import _sparse_hours
+
+    # ingestion completely missed hour 3 on an otherwise fine day
+    polls = {h: 4 for h in range(24) if h != 3}
+    assert _sparse_hours(polls, 24) == [3]

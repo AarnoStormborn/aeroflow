@@ -17,7 +17,8 @@ function, because Modal's plan allows 5 scheduled functions and all 5 are used.
 import io
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from statistics import median
 
 import boto3
@@ -35,7 +36,12 @@ STALE_RAW_WARN_MIN = 45
 STALE_RAW_CRIT_MIN = 120
 # Forecasts run hourly.
 STALE_FORECAST_WARN_MIN = 150
-# Alert if the latest day's hourly density falls this far below the trailing
+# Flag a complete hour that has at most this many polls (normal cadence is 4
+# per hour, one every 15 min; an occasional 3 is a boundary artifact). A sparse
+# hour undercounts the hourly actual, which makes the model look wrong. The real
+# case: 2026-09-14 13:00 and 14:00 UTC had 2 and 1 polls, producing a 26% MAPE
+# "bad day" that was ingestion, not accuracy.
+POLLS_PER_HOUR_ALERT = 2
 # Alert if the latest day's hourly density falls below this fraction of the
 # trailing median. This is the check that would have caught 2026-09-07, when the
 # capture rate halved overnight (17 -> 8 aircraft per poll, ~55 -> ~29 per hour)
@@ -92,6 +98,39 @@ def _daily_hourly_means(days: int, now: datetime) -> list[tuple[str, float]]:
     return sorted(out)
 
 
+def _hour_from_key(key: str) -> int | None:
+    """UTC hour from a raw filename like 20260914_215718.parquet, or None."""
+    name = key.rsplit("/", 1)[-1]
+    if len(name) >= 11 and name[:8].isdigit() and name[8] == "_":
+        try:
+            return int(name[9:11])
+        except ValueError:
+            return None
+    return None
+
+
+def _polls_per_hour(day: date) -> dict[int, int]:
+    """Raw files per UTC hour for a day.
+
+    Each parquet file is exactly one OpenSky poll (a single capture_time), so
+    file count == poll count, readable from the listing alone — no object
+    reads.
+    """
+    prefix = f"{settings.s3.raw_prefix}/year={day.year}/month={day.month:02d}/day={day.day:02d}/"
+    out: dict[int, int] = defaultdict(int)
+    for page in _s3().get_paginator("list_objects_v2").paginate(Bucket=settings.s3.bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            h = _hour_from_key(obj["Key"])
+            if h is not None:
+                out[h] += 1
+    return dict(out)
+
+
+def _sparse_hours(polls: dict[int, int], max_hour: int, threshold: int = POLLS_PER_HOUR_ALERT) -> list[int]:
+    """Hours in [0, max_hour) with at most `threshold` polls."""
+    return [h for h in range(max_hour) if polls.get(h, 0) <= threshold]
+
+
 def coverage_ratio(daily: list[tuple[str, float]]) -> float | None:
     """Latest day's mean density as a fraction of the trailing median.
 
@@ -143,6 +182,29 @@ def gather(now: datetime | None = None) -> dict:
             )
     except Exception as e:
         logger.warning(f"health: raw check failed: {e}")
+
+    # 1b. Are complete hours sparse in their polling? A sparse hour undercounts
+    # the hourly actual and makes the model look wrong (the Sep 14 case).
+    try:
+        sparse: list[str] = []
+        today = now.date()
+        for day in (today - timedelta(days=1), today):
+            max_hour = now.hour if day == today else 24  # skip the partial hour
+            if day == today and now.minute < 15 and now.hour > 0:
+                max_hour = now.hour - 1  # current hour still has its first poll pending
+            for h in _sparse_hours(_polls_per_hour(day), max_hour):
+                sparse.append(f"{day} {h:02d}:00 UTC")
+        metrics["sparse_hours"] = len(sparse)
+        if sparse:
+            issues.append(
+                {
+                    "key": "polls_missing",
+                    "severity": "warn",
+                    "detail": "hours with far fewer polls than the 15-min cadence: " + "; ".join(sparse[:6]),
+                }
+            )
+    except Exception as e:
+        logger.warning(f"health: poll-check failed: {e}")
 
     # 2. Has the amount of traffic being captured collapsed?
     try:

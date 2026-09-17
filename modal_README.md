@@ -98,8 +98,11 @@ modal serve modal_app.py      # live-reload dev server (web endpoints get temp U
     and needs no key.
 - **Pipeline health checks ride along with the hourly forecast.** `run_forecast`
   runs `health.alert_if_unhealthy()` after each forecast (non-fatal): it checks
-  S3 for ingestion staleness (>45/120 min), forecast staleness (>150 min), and
-  a coverage collapse (latest day's density <70% of the trailing 8-day median),
+  S3 for ingestion staleness (>45/120 min), forecast staleness (>150 min), a
+  coverage collapse (latest day's density <70% of the trailing 8-day median),
+  and sparse polling (a complete hour with <=2 polls where the cadence is 4 —
+  this is what made 2026-09-14 look like a 26% MAPE day when it was actually an
+  ingestion gap at 13:00/14:00 UTC),
   and posts to Discord on state change, on recovery, and (for a still-broken
   problem) at most once every 6 hours. This exists because two failures — a
   crashed retrain and the Sep 7 capture-rate halving — each went unnoticed for
