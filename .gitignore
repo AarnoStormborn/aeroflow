@@ -24,3 +24,6 @@ reports/
 *.pem
 model-training/mlflow.db
 model-training/mlruns/
+
+# CatBoost writes training artifacts to CWD
+catboost_info/
