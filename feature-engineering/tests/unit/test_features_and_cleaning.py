@@ -12,6 +12,7 @@ from src.features.data.cleaning import (
 from src.pipeline.features import (
     create_features,
     create_hourly_aggregates,
+    densify_hourly,
 )
 
 
@@ -59,25 +60,80 @@ def test_create_features():
 
     featured = create_features(hourly_df)
 
-    # We expect rows with null lags/rolling window to be dropped
-    # lag_24h requires 24 previous rows, so 35 - 24 = 11 rows remain
-    assert len(featured) == 11
-
     expected_cols = {
         "hour_start", "flight_count", "hour_of_day", "day_of_week",
         "is_weekend", "lag_1h", "lag_24h", "rolling_mean_6h"
     }
     assert expected_cols.issubset(set(featured.columns))
 
-    # Verify lag values on the first surviving row (index 24 of original, count 34)
-    first_row = featured.row(0, named=True)
-    assert first_row["flight_count"] == counts[24]
-    assert first_row["lag_1h"] == counts[23]
-    assert first_row["lag_24h"] == counts[0]
+    # Every observed hour carrying any lag context is retained. Only the very
+    # first hour has no history at all, so only that one is dropped.
+    assert len(featured) == 34
 
-    # rolling_mean_6h of counts[18:24]
-    expected_rolling = sum(counts[18:24]) / 6.0
-    assert pytest.approx(first_row["rolling_mean_6h"]) == expected_rolling
+    first_row = featured.row(0, named=True)
+    assert first_row["flight_count"] == counts[1]
+    assert first_row["lag_1h"] == counts[0]
+    assert first_row["lag_24h"] is None
+
+    # The 24h lag and the full rolling window become available later.
+    row_24 = featured.filter(pl.col("flight_count") == counts[24]).row(0, named=True)
+    assert row_24["lag_1h"] == counts[23]
+    assert row_24["lag_24h"] == counts[0]
+    assert pytest.approx(row_24["rolling_mean_6h"]) == sum(counts[18:24]) / 6.0
+
+
+def test_densify_hourly_fills_missing_hours():
+    """Missing hours become explicit null rows so lags stay time-aligned."""
+    base_dt = datetime(2025, 12, 28, 0, 0, 0)
+    hourly_df = pl.DataFrame({
+        "hour_start": [base_dt + timedelta(hours=h) for h in (0, 1, 4)],
+        "flight_count": [10, 11, 14],
+    })
+
+    dense = densify_hourly(hourly_df)
+
+    assert dense.height == 5  # hours 0..4, with 2 and 3 inserted
+    assert dense["hour_start"].to_list() == [base_dt + timedelta(hours=h) for h in range(5)]
+    assert dense["flight_count"].to_list() == [10, 11, None, None, 14]
+
+
+def test_create_features_across_ingestion_gap():
+    """An outage must not delete the day that follows it.
+
+    Regression test: rows were previously dropped unless lag_1h, lag_24h and
+    rolling_mean_6h were all present. After a 24h gap every lag_24h on the far
+    side points into the hole, so an entire day of real targets vanished - the
+    production symptom was a features file with zero rows.
+    """
+    base_dt = datetime(2025, 12, 28, 0, 0, 0)
+    # 6 hours observed, then a 24-hour outage, then 12 more hours observed.
+    hours = list(range(0, 6)) + list(range(30, 42))
+    hourly_df = pl.DataFrame({
+        "hour_start": [base_dt + timedelta(hours=h) for h in hours],
+        "flight_count": [10 + h for h in hours],
+    })
+
+    featured = create_features(hourly_df)
+    counts = featured["flight_count"].to_list()
+
+    # 5 pre-gap hours + 11 post-gap hours survive. Previously this was 0.
+    assert len(featured) == 16
+    assert counts == [11, 12, 13, 14, 15] + [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+
+    # Hour 30 is the first hour after the gap. With row-based shifting it would
+    # have borrowed hour 5's count as its "1 hour" lag (15, a value 25 hours old).
+    # It now resolves to null, so the row is dropped as context-free instead of
+    # being trained on a lie.
+    assert 40 not in counts
+
+    # The next hour lags correctly off its true predecessor.
+    first_usable = featured.filter(pl.col("flight_count") == 41).row(0, named=True)
+    assert first_usable["lag_1h"] == 40
+    assert first_usable["lag_24h"] is None
+
+    # Once 6 consecutive hours exist again, the rolling window recovers.
+    recovered = featured.filter(pl.col("flight_count") == 46).row(0, named=True)
+    assert pytest.approx(recovered["rolling_mean_6h"]) == sum(range(40, 46)) / 6.0
 
 
 def test_clean_flight_data():
