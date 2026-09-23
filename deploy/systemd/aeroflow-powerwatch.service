@@ -1,0 +1,7 @@
+[Unit]
+Description=Aeroflow power/thermal watchdog (persistent, survives DietPi ramlog)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aeroflow-powerwatch
+Nice=10

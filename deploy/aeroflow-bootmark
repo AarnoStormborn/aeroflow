@@ -1,0 +1,11 @@
+#!/bin/bash
+# Boot marker on persistent storage, so reboots can be counted and dated.
+#
+# Written here rather than to the system journal because DietPi keeps /var/log on
+# a tmpfs and clears it hourly (see aeroflow-powerwatch). Note this must be a
+# script file, not shell inlined into ExecStart: systemd expands %Y/%m/%d as its
+# own specifiers, which silently mangled the inline version into nonsense.
+
+LOG=/var/lib/aeroflow/powerwatch.log
+mkdir -p "$(dirname "$LOG")"
+printf '%s BOOT kernel=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(uname -r)" >> "$LOG"

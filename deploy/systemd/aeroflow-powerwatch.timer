@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Aeroflow power/thermal watchdog every minute
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=60
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

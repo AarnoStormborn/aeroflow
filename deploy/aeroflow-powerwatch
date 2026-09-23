@@ -1,0 +1,41 @@
+#!/bin/bash
+# Record power/thermal state on PERSISTENT storage.
+#
+# Why this exists rather than just reading the system journal: DietPi mounts
+# /var/log as a 50 MiB tmpfs and its hourly cron runs `dietpi-logclear`, so
+# journald's Storage=persistent still lands in RAM and is wiped every hour. The
+# journal therefore cannot explain a reboot, which is the one thing this box
+# keeps doing (2026-09-20 and 2026-09-22 both rebooted, costs 28h and 2h of
+# irreplaceable flight data).
+#
+# vcgencmd's sticky flags are cleared by the firmware on boot, so a brownout or a
+# thermal event can only be caught while it is happening. Hence a heartbeat: the
+# last line before a gap dates the outage, and a non-zero throttle word just
+# before it names the cause.
+#
+# Word bits (see vcgencmd docs):
+#   0  under-voltage now        16  under-voltage occurred
+#   1  freq capped now          17  freq cap occurred
+#   2  throttled now            18  throttling occurred
+#   3  soft temp limit now      19  soft temp limit occurred
+
+LOG=/var/lib/aeroflow/powerwatch.log
+mkdir -p "$(dirname "$LOG")"
+
+FLAGS=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
+TEMP=$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2)
+LINE="$(date -u '+%Y-%m-%dT%H:%M:%SZ') uptime=$(cut -d. -f1 /proc/uptime)s throttled=${FLAGS:-?} temp=${TEMP:-?}"
+
+# Always record trouble; otherwise a heartbeat every 10 minutes, which bounds how
+# much of an outage can go unobserved.
+if [ -n "$FLAGS" ] && [ "$FLAGS" != "0x0" ]; then
+    echo "$LINE" >> "$LOG"
+elif [ $(( $(date +%M) % 10 )) -eq 0 ]; then
+    echo "$LINE" >> "$LOG"
+fi
+
+# Bound the file without logrotate, which is unavailable here because /var/log is
+# volatile. ~1 line/minute while throttling, ~1 per 10 minutes otherwise.
+if [ "$(wc -l < "$LOG")" -gt 3000 ]; then
+    tail -n 1500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi

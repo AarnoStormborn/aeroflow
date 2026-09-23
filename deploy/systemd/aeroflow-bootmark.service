@@ -1,0 +1,7 @@
+[Unit]
+Description=Append an Aeroflow boot marker to persistent storage
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aeroflow-bootmark

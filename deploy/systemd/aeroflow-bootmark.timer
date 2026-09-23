@@ -1,0 +1,9 @@
+[Unit]
+Description=Write the Aeroflow boot marker once per boot
+
+[Timer]
+OnBootSec=20
+Persistent=false
+
+[Install]
+WantedBy=timers.target
