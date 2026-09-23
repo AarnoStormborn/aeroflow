@@ -247,12 +247,19 @@ function renderAnomalies(anomalies) {
     const up = a.deviation_pct > 0;
     const cause = a.likely_cause ? `<span class="cause">${a.likely_cause}</span>` : "";
     const why = a.evidence ? `<div class="why">${a.evidence}</div>` : "";
+    // External evidence, only present for deviations the data layer did not
+    // already explain as a measurement artifact. Sources are named so the
+    // reader can tell a verified number from the classifier's inference.
+    const attr = a.attribution && a.attribution.text
+      ? `<div class="attrib">${a.attribution.text}
+           <span class="src">via ${(a.attribution.sources || []).join(", ")}</span></div>`
+      : "";
     return `<div class="anomaly ${up ? "up" : ""}">
       <span class="date">${a.date}</span>
       <span class="detail">avg <b>${a.mean}</b> flights vs trailing-week <b>${a.trail_mean}</b>${cause}</span>
       <span class="pct ${up ? "up" : "down"}">
         ${up ? "▲" : "▼"} ${Math.abs(a.deviation_pct).toFixed(1)}%</span>
-      ${why}
+      ${why}${attr}
     </div>`;
   }).join("");
 }

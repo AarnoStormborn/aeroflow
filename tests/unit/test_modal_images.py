@@ -28,6 +28,7 @@ MODULE_TO_PACKAGE = {
     "dotenv": "python-dotenv",
     "fastapi": "fastapi",
     "httpx": "httpx",
+    "holidays": "holidays",
     "loguru": "loguru",
     "matplotlib": "matplotlib",
     "mlflow": "mlflow",

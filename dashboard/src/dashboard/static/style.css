@@ -283,6 +283,18 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
   flex-basis: 100%; color: var(--muted); font-size: 12px;
   margin-top: 2px; line-height: 1.5;
 }
+/* External evidence (weather, public holidays) for a genuine deviation. Fenced
+   off from .why because that line is the classifier's own inference, whereas
+   this one is a verifiable measurement from a named source. */
+.anomaly .attrib {
+  flex-basis: 100%; margin-top: 5px; padding-top: 7px;
+  border-top: 1px dashed var(--border);
+  color: var(--muted); font-size: 12px; line-height: 1.5;
+}
+.anomaly .attrib .src {
+  display: block; margin-top: 2px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .5px; opacity: .75;
+}
 
 .outlook-meta { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
 
@@ -375,7 +387,7 @@ footer {
 
   .anomaly { gap: 6px 10px; padding: 10px 12px; }
   .anomaly .date { font-size: 13px; }
-  .anomaly .detail, .anomaly .why { font-size: 11.5px; }
+  .anomaly .detail, .anomaly .why, .anomaly .attrib { font-size: 11.5px; }
 
   #health-body .hgrid { gap: 14px 20px; margin-bottom: 12px; }
   .hitem .hv { font-size: 20px; }

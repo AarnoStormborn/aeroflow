@@ -20,6 +20,7 @@ from typing import Any
 import boto3
 import polars as pl
 from loguru import logger
+from src.dashboard import attribution
 from src.dashboard.config import settings
 
 # In-memory cache: key -> (expires_at, value)
@@ -563,6 +564,10 @@ def patterns_snapshot() -> dict:
                             "deviation_pct": round(dev, 1),
                             "likely_cause": cause,
                             "evidence": evidence,
+                            # Keyless external evidence (weather, holidays), and only
+                            # for deviations the classifier did not already pin on
+                            # how the data was collected.
+                            "attribution": attribution.attribute(d, dev, cause),
                         })
 
         # last-7-day overlay of hourly curves for the trend chart

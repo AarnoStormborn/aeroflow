@@ -14,6 +14,9 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "httpx>=0.27.0",
+    # Indian public holidays, for attributing genuine traffic dips. Keyless, so
+    # the dashboard can resolve causes without holding any provider credential.
+    "holidays>=0.60",
 ]
 
 [dependency-groups]

@@ -194,6 +194,8 @@ dashboard_image = (
         "pydantic-settings>=2.0.0",
         "fastapi",
         "uvicorn",
+        "httpx>=0.27.0",
+        "holidays>=0.60",
     )
     .add_local_dir("./dashboard", "/root/dashboard", copy=True, ignore=_ignore)
 )
