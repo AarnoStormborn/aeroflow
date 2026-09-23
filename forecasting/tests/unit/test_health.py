@@ -182,3 +182,49 @@ def test_sparse_hours_flags_a_whole_empty_hour():
     # ingestion completely missed hour 3 on an otherwise fine day
     polls = {h: 4 for h in range(24) if h != 3}
     assert _sparse_hours(polls, 24) == [3]
+
+
+# ---- forecast staleness vs. ingestion (the duplicate-guard interaction) ----
+
+# The duplicate-forecast guard means a stalled ingester stops producing new
+# forecast files, so an ageing forecast is expected during an ingestion outage
+# and must not be reported as a second, independent fault.
+
+def test_forecast_stale_is_ignored_while_ingestion_is_stalled():
+    from src.forecasting.models.health import (
+        STALE_FORECAST_WARN_MIN,
+        STALE_RAW_WARN_MIN,
+        forecast_stale_is_actionable,
+    )
+
+    aging_forecast = STALE_FORECAST_WARN_MIN + 600  # ~28h stall, the real case
+    stalled_raw = STALE_RAW_WARN_MIN + 1600
+    assert forecast_stale_is_actionable(aging_forecast, stalled_raw) is False
+
+
+def test_forecast_stale_is_flagged_when_raw_data_is_fresh():
+    """A broken forecasting path: data is arriving, forecasts are not."""
+    from src.forecasting.models.health import (
+        STALE_FORECAST_WARN_MIN,
+        STALE_RAW_WARN_MIN,
+        forecast_stale_is_actionable,
+    )
+
+    assert forecast_stale_is_actionable(STALE_FORECAST_WARN_MIN + 10, STALE_RAW_WARN_MIN - 1) is True
+
+
+def test_a_current_forecast_is_never_stale():
+    from src.forecasting.models.health import forecast_stale_is_actionable
+
+    assert forecast_stale_is_actionable(20.0, 5.0) is False
+
+
+def test_forecast_staleness_needs_both_ages_known():
+    """Missing raw or missing forecasts are their own issues, already reported."""
+    from src.forecasting.models.health import (
+        STALE_FORECAST_WARN_MIN,
+        forecast_stale_is_actionable,
+    )
+
+    assert forecast_stale_is_actionable(None, 5.0) is False
+    assert forecast_stale_is_actionable(STALE_FORECAST_WARN_MIN + 100, None) is False

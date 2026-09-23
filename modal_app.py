@@ -423,6 +423,8 @@ def run_forecast() -> dict:
         "component": "forecast",
         "status": "ok",
         "generated_at": result["generated_at"],
+        # False when the anchor had not advanced, so no new file was written
+        "saved": result.get("saved"),
         "health_ok": health.get("ok"),
         "health_issues": [i["key"] for i in health.get("issues", [])],
     }

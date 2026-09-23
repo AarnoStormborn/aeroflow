@@ -55,6 +55,33 @@ COVERAGE_LOOKBACK_DAYS = 8
 REALERT_AFTER = timedelta(hours=6)
 
 
+def forecast_stale_is_actionable(
+    forecast_age_min: float | None,
+    raw_age_min: float | None,
+) -> bool:
+    """
+    Whether an ageing forecast points at a forecasting fault.
+
+    When ingestion stalls there is no new hour to anchor on, so the forecaster
+    correctly stops writing (see ForecastEngine.save_forecast) and the forecast
+    simply ages. Reporting that as its own failure would double-count a single
+    root cause: the ingestion check already names it.
+
+    An ageing forecast is only actionable when there was fresh data it should
+    have acted on, which is what a broken forecasting path looks like.
+
+    Args:
+        forecast_age_min: Age of the newest stored forecast, or None if none exist
+        raw_age_min: Age of the newest raw ingestion file, or None if none exist
+
+    Returns:
+        True if this should raise a forecast_stale issue
+    """
+    if forecast_age_min is None or raw_age_min is None:
+        return False  # nothing to forecast from; ingestion checks cover it
+    return raw_age_min < STALE_RAW_WARN_MIN and forecast_age_min >= STALE_FORECAST_WARN_MIN
+
+
 def _s3():
     return boto3.client(
         "s3",
@@ -231,6 +258,10 @@ def gather(now: datetime | None = None) -> dict:
         logger.warning(f"health: coverage check failed: {e}")
 
     # 3. Is the forecast pipeline still producing?
+    #    A stalled ingester leaves the forecaster with no new hour to anchor on,
+    #    so it stops writing (see ForecastEngine.save_forecast) and a missing
+    #    forecast is a symptom of the ingestion fault rather than a second one.
+    #    Only judge forecast freshness when there was fresh data to act on.
     try:
         fc = _list_times(f"{settings.s3.forecast_prefix}/year={now.year}/month={now.month:02d}/")
         age = _newest_age_min(fc, now)
@@ -239,7 +270,7 @@ def gather(now: datetime | None = None) -> dict:
             issues.append(
                 {"key": "forecast_missing", "severity": "critical", "detail": "no forecasts found for this month"}
             )
-        elif age >= STALE_FORECAST_WARN_MIN:
+        elif forecast_stale_is_actionable(age, metrics.get("raw_age_min")):
             issues.append(
                 {
                     "key": "forecast_stale",

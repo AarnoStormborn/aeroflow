@@ -27,6 +27,30 @@ from src.forecasting.config import settings
 from src.forecasting.data.loader import RecentDataLoader, build_feature_vector
 
 
+def forecast_signature(result: dict[str, Any]) -> tuple[Any, ...]:
+    """
+    Identity of a forecast: what it anchors on, plus which models produced it.
+
+    Two runs sharing a signature generate byte-identical predictions, so
+    re-writing them just churns the archive with copies. Model identity is part
+    of the key because a promotion changes the predictions even when the anchor
+    has not moved.
+
+    Args:
+        result: Forecast document produced by ForecastEngine.forecast()
+
+    Returns:
+        Hashable signature, comparable across runs
+    """
+    models = result.get("models") or {}
+    return (
+        result.get("schema_version"),
+        result.get("last_actual_hour"),
+        # Coerced to strings so entries stay comparable when a version is unset
+        *sorted(f"{name}:{m.get('model_version')}:{m.get('model_stage')}" for name, m in models.items()),
+    )
+
+
 class ForecastEngine:
     """Run recursive forecasting across several registered models."""
 
@@ -138,8 +162,51 @@ class ForecastEngine:
         }
         return result
 
-    def save_forecast(self, result: dict) -> str:
-        """Write forecast to S3 under forecasts/hourly/..."""
+    def _latest_stored_signature(self) -> tuple[Any, ...] | None:
+        """
+        Signature of the most recently stored forecast, or None if there is none.
+
+        Reads only the newest object: keys embed a zero-padded timestamp, so the
+        lexicographically greatest key is the most recent run.
+        """
+        keys: list[str] = []
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"{settings.s3.forecast_prefix}/"):
+            keys.extend(o["Key"] for o in page.get("Contents", []) if o["Key"].endswith(".json"))
+        if not keys:
+            return None
+
+        latest = max(keys)
+        body = self._s3.get_object(Bucket=self.bucket, Key=latest)["Body"].read()
+        return forecast_signature(json.loads(body))
+
+    def save_forecast(self, result: dict, *, dedupe: bool = True) -> str | None:
+        """
+        Write forecast to S3 under forecasts/hourly/...
+
+        Skips the write when it would duplicate the newest stored forecast - the
+        anchor has not advanced and the served models are unchanged, which is what
+        happens every hour while ingestion is stalled. During the Sep 20 outage
+        this wrote ~28 hours of identical files.
+
+        Returns:
+            The S3 URL, or None if the write was skipped as a duplicate.
+        """
+        if dedupe:
+            try:
+                previous = self._latest_stored_signature()
+            except Exception as e:
+                # The guard is an optimisation: a duplicate costs storage, not
+                # correctness, so never let a failed check block the forecast.
+                logger.warning(f"Duplicate-forecast check failed, writing anyway: {e}")
+                previous = None
+            if previous is not None and previous == forecast_signature(result):
+                logger.info(
+                    "Skipping duplicate forecast: anchor still "
+                    f"{result.get('last_actual_hour')} and served models unchanged"
+                )
+                return None
+
         generated = datetime.fromisoformat(result["generated_at"])
         key = (
             f"{settings.s3.forecast_prefix}/year={generated.year}/"
@@ -153,11 +220,25 @@ class ForecastEngine:
 
 
 def run_forecast() -> dict:
-    """Run a multi-model forecast and persist it. Returns the result dict."""
+    """
+    Run a multi-model forecast and persist it.
+
+    Returns:
+        The forecast document plus a `saved` flag saying whether a new file was
+        written (False when the duplicate guard skipped it). The flag is added
+        after persistence, so it never appears in the stored document.
+    """
     engine = ForecastEngine()
     result = engine.forecast()
-    engine.save_forecast(result)
-    return result
+    url = engine.save_forecast(result)
+    return {**result, "saved": url is not None}
+
+
+__all__ = [
+    "ForecastEngine",
+    "forecast_signature",
+    "run_forecast",
+]
 
 
 def main():
