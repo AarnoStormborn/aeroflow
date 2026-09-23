@@ -627,6 +627,62 @@ def _load_complete_actuals(start: date, end: date) -> dict[str, float]:
     return actuals
 
 
+# An hour's flight_count is the union of unique aircraft across that hour's
+# polls, so an hour polled less often than the 15-minute cadence undercounts it.
+# Must match POLLS_PER_HOUR_ALERT in forecasting/models/health.py; the root test
+# suite asserts the two agree so they cannot quietly drift apart.
+POLLS_PER_HOUR_ALERT = 2
+
+
+def _capture_hour(key: str) -> datetime | None:
+    """Capture time encoded in a raw key, e.g. .../20260920_071207.parquet."""
+    stamp = key.rsplit("/", 1)[-1].removesuffix(".parquet")
+    try:
+        return datetime.strptime(stamp, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _sparse_keys_from_polls(day_polls: dict[date, dict[int, int]]) -> set[str]:
+    """Canonical hour keys for hours polled fewer than the cadence requires.
+
+    Hours that were missed entirely are absent from the input and therefore not
+    listed: they have no actual to score, so there is nothing to exclude.
+    """
+    sparse: set[str] = set()
+    for day, polls in day_polls.items():
+        for hour, count in polls.items():
+            if count < POLLS_PER_HOUR_ALERT:
+                sparse.add(_hour_key(datetime(day.year, day.month, day.day, hour, tzinfo=timezone.utc)))
+    return sparse
+
+
+def _sparse_hour_keys(start: date, end: date) -> set[str]:
+    """Canonical hour keys whose polling was too thin to trust as an actual.
+
+    Thin hours make the model look wrong when it is the measurement that is
+    short - the recurring "+22% bias" signature on days the ingester hiccuped.
+    They stay on the chart, because they are still real observations, but they
+    are kept out of the accuracy stats.
+    """
+    store = S3Store()
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    day_polls: dict[date, dict[int, int]] = {}
+
+    day = start
+    while day <= end:
+        polls: dict[int, int] = defaultdict(int)
+        for key in store.list_raw_files(day):
+            captured = _capture_hour(key)
+            if captured is None or captured >= current_hour:
+                continue  # unparseable, or the running hour's partial polling
+            polls[captured.hour] += 1
+        day_polls[day] = polls
+        day += timedelta(days=1)
+
+    return _sparse_keys_from_polls(day_polls)
+
+
 def _error_stats(pairs: list[tuple[float, float]]) -> dict:
     """MAPE / MAE / bias for (predicted, actual) pairs.
 
@@ -690,15 +746,31 @@ def forecasts_snapshot() -> dict:
         # 2-day window left every older point without an actual (63 of 101),
         # so the accuracy line only covered the tail of the chart.
         targets = [r["target"] for rows in model_h1.values() for r in rows]
+        scored: dict[str, dict] = {}
         if targets:
             parsed = [_parse_utc(t) for t in targets]
-            actuals = _load_complete_actuals(
-                min(parsed).date(), max(parsed).date()
-            )
+            window = (min(parsed).date(), max(parsed).date())
+            actuals = _load_complete_actuals(*window)
             for rows in model_h1.values():
                 for r in rows:
                     a = actuals.get(_hour_key(r["target"]))
                     r["actual"] = round(a) if a is not None else None
+
+            # Undercounted hours are displayed but do not score. Scoring them
+            # measures the ingester, not the model, which is how a run of good
+            # days plus one data gap read as 24% overall error.
+            sparse = _sparse_hour_keys(*window)
+            for name, rows in model_h1.items():
+                pairs: list[tuple[float, float]] = []
+                dropped = 0
+                for r in rows:
+                    if r.get("actual") is None:
+                        continue
+                    if _hour_key(r["target"]) in sparse:
+                        dropped += 1
+                        continue
+                    pairs.append((float(r["pred"]), float(r["actual"])))
+                scored[name] = {**_error_stats(pairs), "excluded_sparse": dropped}
 
         return {
             "latest_generated": latest_fc["generated_at"] if latest_fc else None,
@@ -719,16 +791,7 @@ def forecasts_snapshot() -> dict:
             ),
             "h1_history": model_h1,
             # Accuracy summary per model, over the scored hours above.
-            "accuracy": {
-                name: _error_stats(
-                    [
-                        (float(r["pred"]), float(r["actual"]))
-                        for r in rows
-                        if r.get("actual") is not None
-                    ]
-                )
-                for name, rows in model_h1.items()
-            },
+            "accuracy": scored,
             "num_forecasts": len(files),
         }
 

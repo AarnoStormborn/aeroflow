@@ -354,8 +354,14 @@ function renderForecasts(d) {
       const biasTxt = (bias === null || bias === undefined)
         ? ""
         : ` · bias ${bias > 0 ? "+" : ""}${bias}%`;
+      // Sparse hours are excluded server-side: an hour polled less often than
+      // the 15-min cadence undercounts its actual, which would read as model
+      // error. Say so, otherwise the sample size looks arbitrarily smaller.
+      const skipped = acc.excluded_sparse
+        ? `, ${acc.excluded_sparse} sparse excluded`
+        : "";
       stats.innerHTML = `MAPE <b>${acc.mape}%</b> · MAE <b>${acc.mae}</b> aircraft${biasTxt}
-        <span class="stat-n">(${acc.n} h)</span>`;
+        <span class="stat-n">(${acc.n} h${skipped})</span>`;
     } else {
       stats.textContent = "no scored hours yet";
     }
