@@ -43,6 +43,10 @@
   --shadow: none;
   --skel-a: rgba(255, 255, 255, 0.04);
   --skel-b: rgba(255, 255, 255, 0.09);
+
+  /* Vertical rhythm between chart cards. One knob, widened on small screens
+     where the cards stack and need more air between them. */
+  --stack-gap: 16px;
 }
 
 [data-theme="light"] {
@@ -193,7 +197,7 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
   background: var(--panel);
   backdrop-filter: blur(10px);
   border: 1px solid var(--border);
-  border-radius: 18px; padding: 18px 20px; margin-bottom: 16px;
+  border-radius: 18px; padding: 18px 20px; margin-bottom: var(--stack-gap);
   position: relative;
   box-shadow: var(--shadow);
 }
@@ -203,12 +207,23 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 .panel-sub { color: var(--muted); font-size: 12px; }
 .panel-sub b { color: var(--text); font-weight: 700; }
 .stat-n { opacity: .7; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 1000px) { .grid-2, .row-3 { grid-template-columns: 1fr; } }
-/* Panels already get their spacing from the grid gap, so drop their own bottom
-   margin inside a grid. Otherwise gap + margin stack into a 32px hole between
-   every row, which is most obvious once the grids collapse to one column. */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; }
+.row-3 { display: grid; grid-template-columns: repeat(3, 1fr); }
+/* The grid carries the spacing for its panels: the gap between them, and the
+   margin that separates the whole group from the next section. Both have to be
+   here - a grid item's margin does not collapse out of the container, so
+   without the margin the panels' own bottom margins are simply gone and
+   stacked sections touch at 0px. */
+.grid-2, .row-3 { gap: var(--stack-gap); margin-bottom: var(--stack-gap); }
+@media (max-width: 1000px) {
+  /* This is where the two- and three-up grids collapse into a single stacked
+     column, so it is also where the cards stop having horizontal neighbours and
+     need a little more air vertically. */
+  :root { --stack-gap: 20px; }
+  .grid-2, .row-3 { grid-template-columns: 1fr; }
+}
+/* Panels inside a grid already get spacing from the grid gap, so drop their own
+   margin to avoid stacking the two into a double-height hole. */
 .grid-2 > .panel, .row-3 > .panel { margin-bottom: 0; }
 
 .chart-wrap { position: relative; height: 240px; }
@@ -327,6 +342,8 @@ footer {
 }
 
 @media (max-width: 560px) {
+  /* Stacked cards need more air than side-by-side ones. */
+  :root { --stack-gap: 24px; }
   body { padding: 0 14px 36px; }
 
   /* Brand and controls no longer share a line: give the controls their own row. */
@@ -338,7 +355,7 @@ footer {
   .header-right { width: 100%; justify-content: space-between; gap: 10px; }
   .clock { font-size: 11px; }
 
-  .kpi-strip { gap: 10px; margin-bottom: 14px; }
+  .kpi-strip { gap: 10px; margin-bottom: var(--stack-gap); }
   .kpi { padding: 14px 15px; border-radius: 14px; }
   .kpi-label { font-size: 10px; letter-spacing: .6px; }
   .kpi-value { font-size: 27px; margin-top: 4px; }
