@@ -52,9 +52,14 @@ function makeChart(id, cfg) {
   return c;
 }
 
+/* How many x-axis labels fit is a function of viewport width, and Chart.js
+   bakes tick density in at render time, so this is read per render rather than
+   cached. At phone widths 12 labels collide into an unreadable smear. */
+function isNarrow() { return window.innerWidth < 700; }
+
 function baseScales(yTitle) {
   return {
-    x: { ticks: { color: THEME.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: THEME.grid } },
+    x: { ticks: { color: THEME.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: isNarrow() ? 6 : 12 }, grid: { color: THEME.grid } },
     y: { ticks: { color: THEME.muted }, grid: { color: THEME.grid }, title: { display: !!yTitle, text: yTitle, color: THEME.muted } },
   };
 }
@@ -641,6 +646,20 @@ document.addEventListener("visibilitychange", () => {
     startPolling();
     refresh();   // catch up as soon as the tab is looked at again
   }
+});
+
+/* Re-render on viewport change.
+
+   Chart.js resizes the canvas itself, but the axis tick density was decided at
+   render time, so rotating a phone would leave the x-axis as crowded as the
+   previous width allowed. Re-render from the cache once the resize settles -
+   local only, no network. */
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (Object.keys(CACHE).length) rerenderFromCache();
+  }, 200);
 });
 
 if (!document.hidden) startPolling();
