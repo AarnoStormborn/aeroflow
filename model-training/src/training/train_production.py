@@ -16,7 +16,9 @@ retained for reference/history.
 import argparse
 import math
 import os
+import random
 from datetime import date, datetime, timedelta
+from typing import Any
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 import matplotlib
@@ -24,6 +26,7 @@ import matplotlib
 matplotlib.use("Agg")
 try:
     import IPython
+
     if not hasattr(IPython, "get_ipython"):
         IPython.get_ipython = lambda: None
     if not hasattr(IPython, "version_info"):
@@ -58,40 +61,124 @@ MIN_DAYS = 3
 # and at least this many total samples
 MIN_SAMPLES = 40
 
-# A retrain must beat the incumbent Production model by at least this much
-# (relative, on the same validation split) before it is promoted. Without a
-# margin, noise on a small dataset causes the served model to flap between
-# runs. Raise it to demand a clearer win.
-MIN_IMPROVEMENT = 0.05
+# Practical floor for replacing the served model, as a relative MAPE gain.
+#
+# This is deliberately NOT the noise guard - paired_improvement() is. A fixed
+# percentage cannot do that job here: on 2026-09-22 a retrain scored 24.34
+# against the incumbent's 24.33 and was declined for failing to beat it by 5%, a
+# decision resting on a 0.01 difference that no threshold can make meaningful.
+# The floor only stops the registry churning over gains too small to care about.
+MIN_IMPROVEMENT = 0.02
+
+# Confidence level for the paired bootstrap interval.
+CONFIDENCE = 0.95
 
 
-def should_promote(new_mape: float | None, incumbent_mape: float | None,
-                   min_improvement: float = MIN_IMPROVEMENT) -> bool:
-    """Decide whether a retrain should replace the served model.
+def _pct_errors(y_true, y_pred) -> list[float]:
+    """Per-hour absolute percentage errors, skipping hours with no traffic.
 
-    `incumbent_mape=None` means there is no Production model to beat (a fresh
-    registry), which is the only case where promoting blind is correct.
+    A zero actual makes a percentage error undefined, so those hours drop out of
+    the paired comparison. The headline val_mape keeps sklearn's convention so
+    the logged history stays comparable.
     """
-    if incumbent_mape is None:
-        return True
-    if new_mape is None or math.isnan(new_mape):
-        return False
-    return new_mape < incumbent_mape * (1 - min_improvement)
+    return [
+        abs(float(pred) - float(actual)) / abs(float(actual)) * 100
+        for actual, pred in zip(y_true, y_pred, strict=False)
+        if actual
+    ]
 
 
-def incumbent_mape(X_va, y_va) -> tuple[float | None, str]:
-    """Validation MAPE of the model currently in Production, on the SAME split.
+def paired_improvement(new_errors, incumbent_errors, iters: int = 2000, seed: int = 0) -> dict:
+    """Bootstrap the relative MAPE gain of a candidate over the incumbent.
 
-    Returns (mape, status):
+    Both models are scored on the SAME hours, so the errors are paired before
+    resampling. Pairing is the point: the dominant variance here is which hours
+    fell in the window - one gap day makes both models look bad - and resampling
+    pairs cancels that, leaving the question we actually have, which is whether
+    the candidate wins on this hour.
+
+    Returns the point estimate plus a percentile interval. `lower > 0` means the
+    gain survives resampling.
+
+    Caveat worth stating: the interval covers sampling noise in the hours, not
+    regime drift. Three days of data can be confidently unrepresentative of next
+    week, and no interval computed from those days can know that.
+    """
+    n = min(len(new_errors), len(incumbent_errors))
+    if n == 0:
+        return {"improvement": None, "lower": None, "upper": None, "n": 0}
+
+    new = [float(x) for x in new_errors[:n]]
+    inc = [float(x) for x in incumbent_errors[:n]]
+    inc_mean = sum(inc) / n
+    if not inc_mean:
+        return {"improvement": None, "lower": None, "upper": None, "n": n}
+
+    point = 1 - (sum(new) / n) / inc_mean
+
+    rng = random.Random(seed)
+    samples = []
+    for _ in range(iters):
+        idx = [rng.randrange(n) for _ in range(n)]
+        resampled_inc = sum(inc[i] for i in idx) / n
+        if resampled_inc:
+            samples.append(1 - (sum(new[i] for i in idx) / n) / resampled_inc)
+    if not samples:
+        return {"improvement": point, "lower": None, "upper": None, "n": n}
+
+    samples.sort()
+    tail = (1 - CONFIDENCE) / 2
+    return {
+        "improvement": point,
+        "lower": samples[max(0, int(tail * len(samples)))],
+        "upper": samples[min(len(samples) - 1, int((1 - tail) * len(samples)) - 1)],
+        "n": n,
+    }
+
+
+def decide_promotion(stats: dict, min_improvement: float = MIN_IMPROVEMENT) -> tuple[bool, str]:
+    """Turn a paired comparison into a promote/keep decision and a reason.
+
+    The reason distinguishes the cases a bare threshold conflates, because
+    "declined" currently reads as "the candidate was worse" when it usually means
+    "the data could not tell them apart".
+    """
+    improvement = stats.get("improvement")
+    if improvement is None:
+        return False, "candidate or incumbent could not be scored on the same hours"
+
+    lower = stats.get("lower")
+    upper = stats.get("upper")
+    interval = f"{lower:.1%}..{upper:.1%}" if lower is not None and upper is not None else "unavailable"
+
+    if improvement <= min_improvement:
+        if improvement > 0 and lower is not None and lower > 0:
+            return False, f"better by {improvement:.1%}, under the {min_improvement:.0%} floor"
+        return False, (f"no measurable improvement over the incumbent ({improvement:+.1%}, interval {interval})")
+
+    if lower is not None and lower <= 0:
+        return False, (
+            f"{improvement:.1%} better on the point estimate, but the interval ({interval}) includes no improvement"
+        )
+
+    return True, f"{improvement:.1%} better, interval {interval}"
+
+
+def incumbent_predictions(X_va) -> tuple[Any | None, str]:
+    """Predictions of the model currently in Production, on the SAME split.
+
+    Predictions rather than a summary score, because the promotion decision
+    pairs the incumbent's per-hour errors with the candidate's.
+
+    Returns (predictions, status):
       "absent" - nothing in Production, so there is no incumbent to beat
-      "ok"     - mape holds the incumbent's score on this exact validation set
+      "ok"     - predictions are the incumbent's output on this split
       "error"  - a Production version exists but could not be loaded; we do not
                  replace a model we cannot measure
     """
     try:
         client = mlflow.tracking.MlflowClient()
-        versions = [v for v in client.search_model_versions(f"name='{MODEL_NAME}'")
-                    if v.current_stage == "Production"]
+        versions = [v for v in client.search_model_versions(f"name='{MODEL_NAME}'") if v.current_stage == "Production"]
     except Exception as e:
         logger.warning(f"Could not list versions for {MODEL_NAME}: {e}")
         return None, "error"
@@ -104,15 +191,13 @@ def incumbent_mape(X_va, y_va) -> tuple[float | None, str]:
     target = max(versions, key=lambda v: int(v.version))
     try:
         model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{target.version}")
-        pred = model.predict(X_va)
-        return mean_absolute_percentage_error(y_va, pred) * 100, "ok"
+        return model.predict(X_va), "ok"
     except Exception as e:
         logger.warning(f"Could not evaluate incumbent v{target.version}: {e}")
         return None, "error"
 
 
-def load_freshest_features(end_date: date | None = None,
-                           lookback_days: int = 21) -> pl.DataFrame:
+def load_freshest_features(end_date: date | None = None, lookback_days: int = 21) -> pl.DataFrame:
     """Load the freshest contiguous block of feature days.
 
     Walks back from `end_date` (default yesterday) collecting days that have
@@ -141,8 +226,7 @@ def load_freshest_features(end_date: date | None = None,
     if not frames:
         return pl.DataFrame()
     combined = pl.concat(frames, how="diagonal_relaxed").sort("hour_start")
-    logger.info(f"Freshest features: {days_found} days ending {end_date}, "
-                f"{len(combined)} samples")
+    logger.info(f"Freshest features: {days_found} days ending {end_date}, {len(combined)} samples")
     return combined
 
 
@@ -158,8 +242,7 @@ def train_production(end_date: date | None = None) -> dict:
     n_samples = len(df)
 
     if n_days < MIN_DAYS or n_samples < MIN_SAMPLES:
-        reason = (f"insufficient fresh data: {n_days} days / {n_samples} samples "
-                  f"(need >= {MIN_DAYS}d / {MIN_SAMPLES}s)")
+        reason = f"insufficient fresh data: {n_days} days / {n_samples} samples (need >= {MIN_DAYS}d / {MIN_SAMPLES}s)"
         logger.warning(reason)
         return {"status": "skipped", "reason": reason}
 
@@ -171,27 +254,27 @@ def train_production(end_date: date | None = None) -> dict:
     X_tr, X_va = X[:split], X[split:]
     y_tr, y_va = y[:split], y[split:]
 
-    print(f"Training on {n_days} days / {n_samples} samples "
-          f"(train {len(X_tr)} / val {len(X_va)})")
+    print(f"Training on {n_days} days / {n_samples} samples (train {len(X_tr)} / val {len(X_va)})")
     print(f"Traffic: mean {y.mean():.1f} | range {y.min():.0f}-{y.max():.0f}")
 
     mlflow.set_tracking_uri(settings.mlflow.tracking_uri)
     exp = mlflow.get_experiment_by_name(EXPERIMENT)
     if exp is None:
-        mlflow.create_experiment(EXPERIMENT,
-                                 artifact_location=settings.mlflow.artifact_root)
+        mlflow.create_experiment(EXPERIMENT, artifact_location=settings.mlflow.artifact_root)
     mlflow.set_experiment(EXPERIMENT)
 
     model = xgb.XGBRegressor(**PARAMS)
     with mlflow.start_run(run_name="production-hourly-retrain") as run:
         run_id = run.info.run_id
-        mlflow.log_params({
-            **PARAMS,
-            "model_type": "XGBoost-hourly-production",
-            "data_days": n_days,
-            "samples": n_samples,
-            "end_date": str(end_date or (datetime.now().date() - timedelta(days=1))),
-        })
+        mlflow.log_params(
+            {
+                **PARAMS,
+                "model_type": "XGBoost-hourly-production",
+                "data_days": n_days,
+                "samples": n_samples,
+                "end_date": str(end_date or (datetime.now().date() - timedelta(days=1))),
+            }
+        )
 
         model.fit(X_tr, y_tr)
         y_tr_pred = model.predict(X_tr)
@@ -205,16 +288,14 @@ def train_production(end_date: date | None = None) -> dict:
             "train_r2": r2_score(y_tr, y_tr_pred),
             "val_r2": r2_score(y_va, y_va_pred),
         }
-        loggable = {k: v for k, v in metrics.items()
-                    if not (isinstance(v, float) and math.isnan(v))}
+        loggable = {k: v for k, v in metrics.items() if not (isinstance(v, float) and math.isnan(v))}
         mlflow.log_metrics(loggable)
 
         logged = mlflow.sklearn.log_model(
             model,
             "model",
             registered_model_name=MODEL_NAME,
-            skops_trusted_types=("xgboost.core.Booster",
-                                 "xgboost.sklearn.XGBRegressor"),
+            skops_trusted_types=("xgboost.core.Booster", "xgboost.sklearn.XGBRegressor"),
         )
 
         # Promote only if the retrain actually beats what is being served.
@@ -223,40 +304,54 @@ def train_production(end_date: date | None = None) -> dict:
         # vs 16.9%), so unconditional promotion would have degraded production.
         client = mlflow.tracking.MlflowClient()
         new_v = logged.registered_model_version
-        incumbent, inc_status = incumbent_mape(X_va, y_va)
-        promote = should_promote(metrics["val_mape"], incumbent)
-        if inc_status == "error":
+        inc_pred, inc_status = incumbent_predictions(X_va)
+
+        # Compare the two models hour by hour. An aggregate MAPE per model
+        # cannot support this decision - see decide_promotion.
+        stats: dict = {"improvement": None, "lower": None, "upper": None, "n": 0}
+        incumbent = None
+        if inc_status == "ok":
+            # Kept as sklearn's MAPE so the logged series stays comparable with
+            # the runs recorded before this change.
+            incumbent = mean_absolute_percentage_error(y_va, inc_pred) * 100
+            stats = paired_improvement(_pct_errors(y_va, y_va_pred), _pct_errors(y_va, inc_pred))
+
+        if inc_status == "absent":
+            promote, reason = True, "no incumbent in Production to beat"
+        elif inc_status == "error":
             # A Production model exists but we could not score it. Keep it.
-            promote = False
+            promote, reason = False, "incumbent could not be evaluated"
+        else:
+            promote, reason = decide_promotion(stats)
 
-        if incumbent is not None:
-            mlflow.log_metric("incumbent_val_mape", incumbent)
+        for key, value in (
+            ("incumbent_val_mape", incumbent),
+            ("promotion_improvement", stats.get("improvement")),
+            ("promotion_improvement_lower", stats.get("lower")),
+            ("promotion_improvement_upper", stats.get("upper")),
+        ):
+            if value is not None and not (isinstance(value, float) and math.isnan(value)):
+                mlflow.log_metric(key, value)
 
-        if new_v and promote:
+        if promote and not new_v:
+            promote, reason = False, "no registered version to promote"
+
+        if promote:
             # archive_existing_versions keeps exactly one Production version, so
             # `models:/<name>/Production` can never silently fall back to an
             # older model that was left in the stage.
-            client.transition_model_version_stage(
-                MODEL_NAME, new_v, "Production", archive_existing_versions=True
-            )
-            logger.info(f"Promoted {MODEL_NAME} v{new_v} to Production")
+            client.transition_model_version_stage(MODEL_NAME, new_v, "Production", archive_existing_versions=True)
+            logger.info(f"Promoted {MODEL_NAME} v{new_v} to Production: {reason}")
             decision = "promoted"
-            reason = ("no incumbent" if incumbent is None else
-                      f"{metrics['val_mape']:.2f}% beats incumbent {incumbent:.2f}%")
         else:
             decision = "kept_incumbent"
-            if inc_status == "error":
-                reason = "incumbent could not be evaluated"
-            elif incumbent is None:
-                reason = "no registered version to promote"
-            else:
-                reason = (f"{metrics['val_mape']:.2f}% did not beat incumbent "
-                          f"{incumbent:.2f}% by {MIN_IMPROVEMENT:.0%}")
             logger.warning(f"Not promoting {MODEL_NAME} v{new_v}: {reason}")
 
         print(f"\nRegistered {MODEL_NAME} v{new_v} from run {run_id} ({decision}: {reason})")
-        print(f"Val MAPE: {metrics['val_mape']:.2f}%"
-              + (f" | incumbent: {incumbent:.2f}%" if incumbent is not None else ""))
+        print(
+            f"Val MAPE: {metrics['val_mape']:.2f}%"
+            + (f" | incumbent: {incumbent:.2f}%" if incumbent is not None else "")
+        )
 
         return {
             "status": "trained",
@@ -266,6 +361,9 @@ def train_production(end_date: date | None = None) -> dict:
             "version": new_v,
             "val_mape": metrics["val_mape"],
             "incumbent_mape": incumbent,
+            "improvement": stats.get("improvement"),
+            "improvement_lower": stats.get("lower"),
+            "improvement_upper": stats.get("upper"),
             "n_days": n_days,
             "n_samples": n_samples,
         }

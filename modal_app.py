@@ -386,6 +386,11 @@ def run_training(end_date: str | None = None) -> dict:
         "version": result.get("version"),
         "val_mape": result.get("val_mape"),
         "incumbent_mape": result.get("incumbent_mape"),
+        # The paired comparison the decision was actually made on, so a declined
+        # retrain can be told apart from an indistinguishable one.
+        "improvement": result.get("improvement"),
+        "improvement_lower": result.get("improvement_lower"),
+        "improvement_upper": result.get("improvement_upper"),
     }
 
 
