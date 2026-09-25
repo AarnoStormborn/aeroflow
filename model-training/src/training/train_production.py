@@ -40,6 +40,7 @@ from loguru import logger
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, r2_score
 from src.training.config import settings
 from src.training.data_loader import create_loader
+from src.training.quality import hour_key, sparse_hour_keys
 
 EXPERIMENT = "flight-traffic-forecasting"
 MODEL_NAME = "flight-traffic-hourly"
@@ -248,13 +249,37 @@ def train_production(end_date: date | None = None) -> dict:
 
     X = df.select(settings.training.feature_columns).to_numpy()
     y = df.select(settings.training.target_column).to_numpy().flatten()
+    hours = df["hour_start"].to_list()
 
     # Time-based split: last 20% as validation
     split = int(len(X) * 0.8)
     X_tr, X_va = X[:split], X[split:]
     y_tr, y_va = y[:split], y[split:]
 
-    print(f"Training on {n_days} days / {n_samples} samples (train {len(X_tr)} / val {len(X_va)})")
+    # Drop undercounted hours from the validation set BEFORE anything is scored.
+    # Both models are measured on this split, so leaving them in pushes
+    # measurement noise straight into the promotion decision: the 2026-09-25 run
+    # compared over a split containing two such hours, which moved the incumbent
+    # by ~4.9 MAPE points on its own and widened the paired interval to 19 points.
+    val_hours = hours[split:]
+    sparse_dropped = 0
+    if val_hours:
+        loader = create_loader()
+        sparse = sparse_hour_keys(
+            loader.client,
+            settings.s3.bucket_name,
+            min(val_hours).date(),
+            max(val_hours).date(),
+        )
+        keep = [i for i, h in enumerate(val_hours) if hour_key(h) not in sparse]
+        sparse_dropped = len(val_hours) - len(keep)
+        if sparse_dropped:
+            X_va, y_va = X_va[keep], y_va[keep]
+
+    print(
+        f"Training on {n_days} days / {n_samples} samples "
+        f"(train {len(X_tr)} / val {len(X_va)}" + (f", {sparse_dropped} sparse dropped)" if sparse_dropped else ")")
+    )
     print(f"Traffic: mean {y.mean():.1f} | range {y.min():.0f}-{y.max():.0f}")
 
     mlflow.set_tracking_uri(settings.mlflow.tracking_uri)
@@ -272,6 +297,8 @@ def train_production(end_date: date | None = None) -> dict:
                 "model_type": "XGBoost-hourly-production",
                 "data_days": n_days,
                 "samples": n_samples,
+                "val_samples": len(X_va),
+                "sparse_val_hours_dropped": sparse_dropped,
                 "end_date": str(end_date or (datetime.now().date() - timedelta(days=1))),
             }
         )
@@ -364,6 +391,8 @@ def train_production(end_date: date | None = None) -> dict:
             "improvement": stats.get("improvement"),
             "improvement_lower": stats.get("lower"),
             "improvement_upper": stats.get("upper"),
+            "val_samples": len(X_va),
+            "sparse_val_hours_dropped": sparse_dropped,
             "n_days": n_days,
             "n_samples": n_samples,
         }

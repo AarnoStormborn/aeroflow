@@ -8,6 +8,10 @@ accuracy and the health alert disagreeing about the same hour.
 They are separate deployables with no shared dependency, so this asserts on the
 source text rather than importing across packages - the same approach the
 Modal image-drift guard takes.
+
+All three need to agree because they answer the same question at different
+moments: forecasting alerts on today's thin hours, the dashboard keeps them out
+of the accuracy it shows, and training keeps them out of the promotion decision.
 """
 
 import re
@@ -19,6 +23,7 @@ NAME = "POLLS_PER_HOUR_ALERT"
 SOURCES = {
     "dashboard": ROOT / "dashboard/src/dashboard/data.py",
     "health": ROOT / "forecasting/src/forecasting/models/health.py",
+    "training": ROOT / "model-training/src/training/quality.py",
 }
 
 
