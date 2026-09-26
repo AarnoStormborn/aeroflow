@@ -6,6 +6,9 @@
 # script file, not shell inlined into ExecStart: systemd expands %Y/%m/%d as its
 # own specifiers, which silently mangled the inline version into nonsense.
 
-LOG=/var/lib/aeroflow/powerwatch.log
-mkdir -p "$(dirname "$LOG")"
-printf '%s BOOT kernel=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(uname -r)" >> "$LOG"
+LOG_DIR=/var/lib/aeroflow
+mkdir -p "$LOG_DIR"
+LINE="$(date -u '+%Y-%m-%dT%H:%M:%SZ') BOOT kernel=$(uname -r)"
+echo "$LINE" >> "$LOG_DIR/powerwatch.log"
+# events.log is trimmed far less aggressively, so boots survive there.
+echo "$LINE" >> "$LOG_DIR/events.log"

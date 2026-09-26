@@ -4,14 +4,24 @@
 # Why this exists rather than just reading the system journal: DietPi mounts
 # /var/log as a 50 MiB tmpfs and its hourly cron runs `dietpi-logclear`, so
 # journald's Storage=persistent still lands in RAM and is wiped every hour. The
-# journal therefore cannot explain a reboot, which is the one thing this box
-# keeps doing (2026-09-20 and 2026-09-22 both rebooted, costs 28h and 2h of
-# irreplaceable flight data).
+# journal therefore cannot explain a reboot, which is the one thing this box keeps
+# doing (2026-09-20 cost 28h of irreplaceable flight data, 2026-09-22 cost 2h,
+# 2026-09-24 cost none but still happened).
 #
 # vcgencmd's sticky flags are cleared by the firmware on boot, so a brownout or a
 # thermal event can only be caught while it is happening. Hence a heartbeat: the
 # last line before a gap dates the outage, and a non-zero throttle word just
 # before it names the cause.
+#
+# Two files, because they have different retention needs:
+#   powerwatch.log  rolling heartbeat, ~1 line/min while throttling. Trimmed
+#                   generously so the run-up to a reboot survives being looked at
+#                   a week later. An earlier 3000-line cap held only ~2 days and
+#                   aged out the evidence for the 2026-09-24 reboot before anyone
+#                   read it.
+#   events.log      every throttle-word *change*, trimmed at 500 lines. A fresh
+#                   boot starts at 0x0, so the first change each boot doubles as
+#                   a reboot marker, and this survives indefinitely.
 #
 # Word bits (see vcgencmd docs):
 #   0  under-voltage now        16  under-voltage occurred
@@ -19,8 +29,11 @@
 #   2  throttled now            18  throttling occurred
 #   3  soft temp limit now      19  soft temp limit occurred
 
-LOG=/var/lib/aeroflow/powerwatch.log
-mkdir -p "$(dirname "$LOG")"
+LOG_DIR=/var/lib/aeroflow
+LOG=$LOG_DIR/powerwatch.log
+EVENTS=$LOG_DIR/events.log
+STATE=$LOG_DIR/.throttle_state
+mkdir -p "$LOG_DIR"
 
 FLAGS=$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)
 TEMP=$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2)
@@ -34,8 +47,18 @@ elif [ $(( $(date +%M) % 10 )) -eq 0 ]; then
     echo "$LINE" >> "$LOG"
 fi
 
-# Bound the file without logrotate, which is unavailable here because /var/log is
-# volatile. ~1 line/minute while throttling, ~1 per 10 minutes otherwise.
-if [ "$(wc -l < "$LOG")" -gt 3000 ]; then
-    tail -n 1500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+# Throttle transitions, including back to 0x0, form the durable timeline.
+LAST=$(cat "$STATE" 2>/dev/null || echo "")
+if [ -n "$FLAGS" ] && [ "$FLAGS" != "$LAST" ]; then
+    echo "$LINE" >> "$EVENTS"
+    echo "$FLAGS" > "$STATE"
+fi
+
+# Bound both files without logrotate, which is unavailable here because /var/log
+# is volatile. 20000 lines is about a week at one line per minute.
+if [ "$(wc -l < "$LOG")" -gt 20000 ]; then
+    tail -n 10000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+if [ -f "$EVENTS" ] && [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
+    tail -n 250 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
 fi
