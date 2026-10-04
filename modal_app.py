@@ -552,6 +552,23 @@ def mlflow_ui():
     # Run mlflow server on 0.0.0.0:5000 with the Volume-backed SQLite store.
     # MLflow 3.5+ validates Host headers; Modal proxies requests with its own
     # hostname, so allow it (restrict to the Modal subdomain for production).
+    # MLflow's basic-auth app runs its schema migration once per worker, and with
+    # the default worker count those migrations race on first start: one creates
+    # `users` / `alembic_version_auth`, the others die with "table users already
+    # exists". That floods the logs on every cold start and can leave the UI
+    # running short of workers.
+    #
+    # One worker removes the race outright. This server only serves humans -
+    # training and forecasting open the SQLite store directly over the volume -
+    # so there is no throughput to lose. `--workers` is also the documented flag,
+    # unlike reaching into mlflow.server.auth internals to pre-migrate by hand.
+    #
+    # Clear any leftover auth DB first: it is ephemeral by design, and a
+    # half-migrated file from a crashed start would otherwise wedge the retry.
+    for stale in ("/tmp/mlflow_auth.db", "/tmp/mlflow_auth.db-journal"):
+        if os.path.exists(stale):
+            os.remove(stale)
+
     cmd = [
         "mlflow", "server",
         "--backend-store-uri", f"sqlite:///{db_path}",
@@ -560,6 +577,7 @@ def mlflow_ui():
         "--port", "5000",
         "--allowed-hosts", "*",
         "--app-name", "basic-auth",
+        "--workers", "1",
     ]
     proc = subprocess.Popen(cmd)
     return proc
