@@ -35,6 +35,11 @@ function fmtStamp(iso) {
 // would find the canvas and call canvas.destroy(), which does not exist.
 const charts = Object.create(null);
 
+/* Frozen-archive state. Set from the first payload that carries archived:true,
+   after which the page stops polling and presents itself as a snapshot rather
+   than pretending to be live. */
+let ARCHIVED = null;
+
 function makeChart(id, cfg) {
   const el = document.getElementById(id);
   if (!el || typeof Chart === "undefined") return null;
@@ -78,7 +83,9 @@ async function loadLive() {
 }
 
 function renderLive(d) {
-  document.getElementById("live-sub").textContent = `as of ${fmtClock(d.now_utc)}`;
+  const archived = applyArchive(d);
+  document.getElementById("live-sub").textContent =
+    archived ? `snapshot ${d.snapshot_date}` : `as of ${fmtClock(d.now_utc)}`;
   document.getElementById("clock").textContent = fmtClock(d.now_utc);
 
   const today = d.today || [];
@@ -97,6 +104,13 @@ function renderLive(d) {
   function renderActiveCaption() {
     const cap = document.getElementById("active-caption");
     if (!cap || !d.active_captured_at) return;
+    // Archived: "2526m ago" is technically true but meaningless, and reads as a
+    // fault. State plainly that the figure is the snapshot's.
+    if (archived) {
+      cap.textContent = "in airspace at snapshot";
+      cap.title = `Instantaneous count from the poll at ${fmtClock(d.active_captured_at)} UTC`;
+      return;
+    }
     const at = new Date(d.active_captured_at);
     const ageMin = Math.round((Date.now() - at.getTime()) / 60000);
     cap.innerHTML = `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
@@ -590,15 +604,40 @@ async function refresh() {
    the clock and snapshot age honest at zero cost. */
 function tickLocal() {
   const clock = document.getElementById("clock");
-  if (clock) clock.textContent = fmtClock(new Date().toISOString());
+  // An archived page has no "now": showing wall-clock time next to frozen data
+  // would read as if the numbers were current.
+  const stamp = ARCHIVED ? ARCHIVED.now_utc : new Date().toISOString();
+  if (clock) clock.textContent = fmtClock(stamp);
 
   const cap = document.getElementById("active-caption");
   const at = CACHE.live && CACHE.live.active_captured_at
     ? new Date(CACHE.live.active_captured_at) : null;
-  if (cap && at) {
-    const ageMin = Math.round((Date.now() - at.getTime()) / 60000);
-    cap.innerHTML = `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
+  if (!cap || !at) return;
+  if (ARCHIVED) {
+    cap.textContent = "in airspace at snapshot";
+    cap.title = `Instantaneous count from the specially polled snapshot at ${fmtClock(ARCHIVED.active_captured_at || ARCHIVED.now_utc)} UTC`;
+    return;
   }
+  const ageMin = Math.round((Date.now() - at.getTime()) / 60000);
+  cap.innerHTML = `in airspace · snapshot ${ageMin <= 0 ? "just now" : ageMin + "m ago"}`;
+}
+
+/* Switch the page into archive presentation and stop all refresh activity. */
+function applyArchive(d) {
+  if (!d || !d.archived) return false;
+  ARCHIVED = d;
+  const banner = document.getElementById("archive-banner");
+  if (banner) {
+    banner.classList.remove("hidden");
+    const el = document.getElementById("archive-date");
+    if (el) el.textContent = `${d.snapshot_date} 23:59 UTC`;
+  }
+  const mode = document.getElementById("foot-mode");
+  if (mode) mode.textContent = "archived — refresh disabled";
+  const pulse = document.getElementById("foot-pulse");
+  if (pulse) pulse.classList.add("frozen");
+  stopPolling();
+  return true;
 }
 
 /* Paint immediately from the last good payloads (if any), then refresh.
@@ -644,7 +683,9 @@ const POLL_MS = 180000;
 let pollTimer = null;
 
 function startPolling() {
-  if (pollTimer) return;
+  // An archived page is a snapshot: never resume polling, including when the
+  // tab returns to the foreground.
+  if (ARCHIVED || pollTimer) return;
   pollTimer = setInterval(refresh, POLL_MS);
 }
 

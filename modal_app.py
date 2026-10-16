@@ -40,6 +40,21 @@ import modal
 # than trust the ambient setting.
 EXPECTED_MODAL_PROFILE = "harshsingh90220"
 
+# ---------------------------------------------------------------------------
+# ARCHIVED PROJECT
+#
+# Collection has been stopped. Ingestion is off on the Pi and every scheduled
+# function below has had its cron removed, so nothing new is written to S3. The
+# dashboard is pinned with DASH_SNAPSHOT_DATE to the last day of healthy
+# coverage (upstream ADS-B coverage over Mumbai collapsed from 2026-10-15),
+# which freezes every read at that date and stops the page polling. The result
+# is a static, representative snapshot of the pipeline rather than a live feed.
+#
+# To resume: re-enable the crons, restart ingestion on the Pi, and unset
+# AEROFLOW_SNAPSHOT_DATE.
+# ---------------------------------------------------------------------------
+AEROFLOW_SNAPSHOT_DATE = "2026-10-14"
+
 
 def _resolved_modal_profile() -> str | None:
     """The profile Modal would actually use, or None if undeterminable.
@@ -243,6 +258,8 @@ def _set_env_defaults() -> None:
     """Ensure env vars the code expects are set, with sensible defaults."""
     os.environ.setdefault("AWS_S3_BUCKET_NAME", "flights-forecasting")
     os.environ.setdefault("AWS_REGION", "ap-south-1")
+    # Freezes the dashboard at the last healthy day (see ARCHIVED PROJECT above).
+    os.environ.setdefault("DASH_SNAPSHOT_DATE", AEROFLOW_SNAPSHOT_DATE)
     os.environ.setdefault("DISCORD_ENABLED", "true")
     os.environ.setdefault("FE_S3_PREFIX", "raw/flights/states")
     os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{VOLUME_MOUNT}/mlflow.db")
@@ -276,7 +293,7 @@ def _syspath(*roots: str) -> None:
     image=feature_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("0 2 * * *"),
+    # schedule removed: project archived - see the ARCHIVED PROJECT note above
     timeout=1800,
 )
 def run_feature(target_date: str | None = None) -> dict:
@@ -320,7 +337,7 @@ def run_feature(target_date: str | None = None) -> dict:
     image=feature_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("0 3 * * *"),
+    # schedule removed: project archived - see the ARCHIVED PROJECT note above
     timeout=1800,
 )
 def run_report(target_date: str | None = None) -> dict:
@@ -354,7 +371,7 @@ def run_report(target_date: str | None = None) -> dict:
     image=training_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("0 2 */3 * *"),
+    # schedule removed: project archived - see the ARCHIVED PROJECT note above
     timeout=3600,
 )
 def run_training(end_date: str | None = None) -> dict:
@@ -403,7 +420,7 @@ def run_training(end_date: str | None = None) -> dict:
     image=forecast_image,
     secrets=[secrets, mlflow_auth],
     volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("15 * * * *"),  # every hour at :15
+    # schedule removed: project archived - see the ARCHIVED PROJECT note above
     timeout=600,
 )
 def run_forecast() -> dict:
@@ -486,7 +503,7 @@ def forecast_api():
     image=forecast_image,
     secrets=[secrets],
     volumes={VOLUME_MOUNT: volume},
-    schedule=modal.Cron("30 1 * * *"),  # daily 01:30 UTC
+    # schedule removed: project archived - see the ARCHIVED PROJECT note above
     timeout=600,
 )
 def run_eval() -> dict:

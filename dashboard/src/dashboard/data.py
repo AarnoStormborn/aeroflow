@@ -47,6 +47,72 @@ _OBJECTS_MAX = 5000
 _NEGATIVE_TTL = 300.0
 
 
+# ---- snapshot (frozen archive) --------------------------------------------
+
+# Fallback for a forecast key that will not parse: treat it as ancient so an
+# archive filter drops it rather than keeping an undateable file.
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def snapshot_date() -> date | None:
+    """The frozen cutoff date, or None when serving live data."""
+    raw = settings.snapshot_date
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        logger.warning(f"invalid snapshot_date {raw!r}; serving live data instead")
+        return None
+
+
+def is_snapshot() -> bool:
+    return snapshot_date() is not None
+
+
+def _now() -> datetime:
+    """Current time, or the end of the snapshot day when archived.
+
+    Freezing 'now' rather than special-casing every query means each existing
+    date-derived decision - which day counts as today, how old the newest file
+    is, which hours are complete - is evaluated as of the snapshot moment. That
+    is what lets the page render the last healthy state instead of reporting
+    live staleness against ingestion that has deliberately stopped.
+    """
+    snap = snapshot_date()
+    if snap is None:
+        return datetime.now(timezone.utc)
+    # Constructed explicitly rather than via datetime.combine(..., time(...)):
+    # importing `time` from datetime would shadow the `time` module that the
+    # payload cache uses for time.time().
+    return datetime(snap.year, snap.month, snap.day, 23, 59, 59, tzinfo=timezone.utc)
+
+
+def snapshot_meta() -> dict:
+    """Fields every payload carries so the UI can label an archived page."""
+    snap = snapshot_date()
+    if snap is None:
+        return {"archived": False}
+    return {
+        "archived": True,
+        "snapshot_date": snap.isoformat(),
+        "snapshot_at": _now().isoformat(),
+    }
+
+
+def _forecast_key_time(key: str) -> datetime | None:
+    """Generation time encoded in a forecast key, e.g. forecast_20261014_171505.json."""
+    m = re.search(r"forecast_(\d{8})_(\d{6})", key)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+
+
 def _cached(key: str, loader, ttl: float = _CACHE_TTL):
     now = time.time()
     hit = _CACHE.get(key)
@@ -159,7 +225,7 @@ class S3Store:
         return _cached_object(key, load)
 
     def _day_hourly(self, dt: date) -> pl.DataFrame:
-        ttl = 120.0 if dt == datetime.now(timezone.utc).date() else 900.0
+        ttl = 120.0 if dt == _now().date() else 900.0
 
         def load():
             dfs = []
@@ -193,7 +259,7 @@ class S3Store:
         capture_time), so this count is an INSTANTANEOUS observation, not an
         hourly aggregate. Returns {} when no snapshot is available.
         """
-        today = datetime.now(timezone.utc).date()
+        today = _now().date()
 
         def load():
             files = self.list_raw_files(today)
@@ -217,7 +283,7 @@ class S3Store:
     def latest_ticks(self, n: int = LIVE_TICKS) -> pl.DataFrame:
         """Combine the most recent raw snapshots (across today, falling back
         to yesterday if today has none yet)."""
-        today = datetime.now(timezone.utc).date()
+        today = _now().date()
 
         def load():
             files = self.list_raw_files(today)
@@ -334,7 +400,7 @@ def _hour_key(value: object) -> str:
 
 
 def recent_raw_days(days: int = 10) -> list[date]:
-    today = datetime.now(timezone.utc).date()
+    today = _now().date()
     return [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
 
 
@@ -374,7 +440,7 @@ def live_snapshot() -> dict:
     store = S3Store()
 
     def load():
-        today = datetime.now(timezone.utc).date()
+        today = _now().date()
         today_df = hourly_day(store, today)
         yesterday = today - timedelta(days=1)
         yest_df = hourly_day(store, yesterday)
@@ -392,10 +458,10 @@ def live_snapshot() -> dict:
         breakdown = _breakdown(ticks)
 
         return {
-            "now_utc": datetime.now(timezone.utc).isoformat(),
+            **snapshot_meta(),
+            "now_utc": _now().isoformat(),
             # Instantaneous count from the newest poll (not an hourly average)
-            "active_aircraft_now": active.get("count", 0),
-            "active_captured_at": active.get("captured_at"),
+            "active_aircraft_now": active.get("count", 0),            "active_captured_at": active.get("captured_at"),
             "today": series(today_df),
             "yesterday": series(yest_df),
             "breakdown": breakdown,
@@ -585,6 +651,7 @@ def patterns_snapshot() -> dict:
             for d in days7
         ]
         return {
+            **snapshot_meta(),
             "hour_profile": hour_profile,
             "weekday_profile": weekday_profile,
             "day_parts": part_profile,
@@ -615,7 +682,7 @@ def _load_complete_actuals(start: date, end: date) -> dict[str, float]:
     forecast, so only finished hours are returned.
     """
     store = S3Store()
-    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_hour = _now().replace(minute=0, second=0, microsecond=0)
     actuals: dict[str, float] = {}
     day = start
     while day <= end:
@@ -671,7 +738,7 @@ def _sparse_hour_keys(start: date, end: date) -> set[str]:
     are kept out of the accuracy stats.
     """
     store = S3Store()
-    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    current_hour = _now().replace(minute=0, second=0, microsecond=0)
     day_polls: dict[date, dict[int, int]] = {}
 
     day = start
@@ -712,6 +779,13 @@ def forecasts_snapshot() -> dict:
 
     def load():
         files = store.forecast_files()
+        # In an archive, ignore forecasts generated after the freeze. Without
+        # this the accuracy panel would blend in the later runs made against
+        # broken ingestion and drag the frozen score down with them.
+        cutoff = snapshot_date()
+        if cutoff is not None:
+            files = [k for k in files
+                     if (_forecast_key_time(k) or _EPOCH).date() <= cutoff]
         latest_fc = store.read_forecast(files[-1]) if files else None
 
         model_h1: dict[str, list] = defaultdict(list)
@@ -778,6 +852,7 @@ def forecasts_snapshot() -> dict:
                 scored[name] = {**_error_stats(pairs), "excluded_sparse": dropped}
 
         return {
+            **snapshot_meta(),
             "latest_generated": latest_fc["generated_at"] if latest_fc else None,
             "latest_models": (
                 {
@@ -807,7 +882,7 @@ def health_snapshot() -> dict:
     store = S3Store()
 
     def load():
-        now = datetime.now(timezone.utc)
+        now = _now()
         today = now.date()
         files_today = store.list_raw_files(today)
         freshness_min = None
@@ -827,6 +902,7 @@ def health_snapshot() -> dict:
                              "features": dt in feat_days})
 
         return {
+            **snapshot_meta(),
             "now_utc": now.isoformat(),
             "raw_files_today": len(files_today),
             "data_freshness_min": freshness_min,

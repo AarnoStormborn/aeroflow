@@ -29,6 +29,13 @@ class Settings(BaseSettings):
 
     s3: S3Settings = Field(default_factory=S3Settings)
 
+    # When set (YYYY-MM-DD) the dashboard serves a FROZEN ARCHIVE rather than
+    # live data: every read is clamped to this date, the UI stops polling, and
+    # freshness/health are evaluated as of that moment instead of against the
+    # present. Set when ingestion has stopped and the page should present the
+    # last healthy state rather than an empty or degraded one.
+    snapshot_date: str | None = Field(default=None)
+
     # MLflow tracking URI (used server-side only; NEVER exposed to the page)
     mlflow_tracking_uri: str = Field(
         default="https://harshsingh90220--aeroflow-mlflow-ui.modal.run"

@@ -192,6 +192,23 @@ h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.3px; }
 .kpi-value { font-size: 36px; font-weight: 800; margin-top: 6px; letter-spacing: -1px; }
 .kpi-trend { color: var(--muted); font-size: 12px; margin-top: 2px; }
 
+/* Frozen-archive banner. Shown only when the payload reports archived data, so
+   the page cannot imply it is displaying current traffic. */
+.archive-banner {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 11px 16px; margin-bottom: 16px;
+  border-radius: 12px; font-size: 13px; color: var(--muted);
+  background: rgba(var(--amber-rgb), .07);
+  border: 1px solid rgba(var(--amber-rgb), .28);
+}
+.archive-banner .ab-tag {
+  color: var(--amber); font-weight: 700; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .8px; white-space: nowrap;
+}
+.archive-banner .ab-text b { color: var(--text); font-weight: 700; }
+/* A stopped collector should not keep pulsing like a live feed. */
+.dotpulse.frozen { background: var(--muted); animation: none; }
+
 /* Panels */
 .panel {
   background: var(--panel);

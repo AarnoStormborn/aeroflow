@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aeroflow · Mumbai Airspace</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=33">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png?v=33">
-  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=33">
-  <script src="/static/theme.js?v=33"></script>
-  <script src="/static/chart.umd.min.js?v=33"></script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=35">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png?v=35">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=35">
+  <script src="/static/theme.js?v=35"></script>
+  <script src="/static/chart.umd.min.js?v=35"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=33">
+  <link rel="stylesheet" href="/static/style.css?v=35">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -37,6 +37,14 @@
               aria-label="Switch theme" title="Switch light/dark">☀</button>
     </div>
   </header>
+
+  <!-- Frozen-archive notice. Hidden in live mode; revealed from the payload's
+       archived flag so the page never implies it is showing current traffic. -->
+  <div class="archive-banner hidden" id="archive-banner">
+    <span class="ab-tag">Archived snapshot</span>
+    <span class="ab-text">Data frozen at <b id="archive-date">–</b> — collection has
+      been stopped and this page shows the last healthy state, not live traffic.</span>
+  </div>
 
   <!-- Hero KPI strip -->
   <section class="kpi-strip" id="kpi-strip">
@@ -162,10 +170,10 @@
   <footer>
     <span class="mono" id="foot-updated">–</span>
     <span class="spinner" id="spinner" hidden></span>
-    <span class="dotpulse"></span>
-    <span>auto-refresh 3m</span>
+    <span class="dotpulse" id="foot-pulse"></span>
+    <span id="foot-mode">auto-refresh 3m</span>
   </footer>
 
-  <script src="/static/app.js?v=33"></script>
+  <script src="/static/app.js?v=35"></script>
 </body>
 </html>
